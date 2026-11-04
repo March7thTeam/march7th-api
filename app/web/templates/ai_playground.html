@@ -12,7 +12,7 @@
       <label class="field">API Key<input id="play-key" class="mono" type="password" required placeholder="lapi_…" autocomplete="off" spellcheck="false"></label>
       <div class="actions"><button class="btn sm" type="button" id="load-models">读取这把密钥可用的模型</button></div>
       <p id="model-load-status" class="muted small" role="status"></p>
-      <label class="field">模型 ID<input id="play-model" class="mono" list="allowed-models" value="gpt-6-luna" required autocomplete="off" spellcheck="false"></label>
+      <label class="field">模型 ID<input id="play-model" class="mono" list="allowed-models" value="{{ catalog.default_model or 'gpt-6-luna' }}" required autocomplete="off" spellcheck="false"></label>
       <datalist id="allowed-models"></datalist>
       <label class="field">提示词<textarea id="play-prompt" rows="6" maxlength="8000" required placeholder="用一句话介绍你自己。"></textarea></label>
       <label class="check"><input type="checkbox" id="play-stream" checked> 流式输出</label>

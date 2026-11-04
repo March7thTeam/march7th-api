@@ -29,9 +29,17 @@ def line_for(model_id: str | None) -> dict:
 
 
 def board_state(model_id: str, text_candidate: bool) -> dict:
-    """Departure-board lamp for a model: boardable, not opened, or not priced."""
+    """The one status vocabulary every page uses: callable, interface not open, or not priced."""
     if text_candidate:
-        return {"tone": "ok", "label": "可乘车"}
+        return {"tone": "ok", "label": "可调用"}
     if model_id.startswith("gpt-image-"):
-        return {"tone": "off", "label": "暂未开放"}
-    return {"tone": "warn", "label": "未计价"}
+        return {"tone": "off", "label": "接口未开放"}
+    return {"tone": "warn", "label": "暂未计价"}
+
+
+def verification_note(verification: dict | None, text_candidate: bool) -> str:
+    """Short test-coverage note shared by the departure board and the model cards."""
+    protocols = (verification or {}).get("protocols") or []
+    if protocols:
+        return f"已实测 {len(protocols)} 种协议"
+    return "待本站实测" if text_candidate else "—"

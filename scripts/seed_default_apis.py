@@ -6,24 +6,6 @@ from app.utils.timefmt import now_iso
 
 DEFAULT_APIS = [
     {
-        "name": "AstrBot / ATRI",
-        "slug": "astrbot",
-        "base_url": settings.astrbot_base_url,
-        "auth_type": "bearer",
-        "secret_ref": "ASTRBOT_BRIDGE_TOKEN",
-        "description": "AstrBot OpenAPI integration",
-        "tags": "astrbot,bot,atri",
-        "endpoints": [
-            ("OpenAPI", "GET", "/openapi.json"),
-            ("Health", "GET", "/health"),
-            ("Plugins", "GET", "/astrbot/plugins"),
-            ("Bots", "GET", "/astrbot/bots"),
-            ("Coze health", "GET", "/coze/health"),
-            ("Coze plugins", "GET", "/coze/astrbot/plugins"),
-            ("Coze bots", "GET", "/coze/astrbot/bots"),
-        ],
-    },
-    {
         "name": "LuomoCore",
         "slug": "luomocore",
         "base_url": settings.luomocore_base_url,
@@ -49,8 +31,6 @@ DEFAULT_APIS = [
     },
 ]
 DEFAULT_SECRETS = [
-    ("AstrBot API Key", "ASTRBOT_API_KEY"),
-    ("AstrBot Bridge Token", "ASTRBOT_BRIDGE_TOKEN"),
     ("LuomoCore API Token", "LUOMOCORE_API_TOKEN"),
     ("GitHub Token", "GITHUB_TOKEN"),
     ("Cloudflare API Token", "CLOUDFLARE_API_TOKEN"),
@@ -58,8 +38,6 @@ DEFAULT_SECRETS = [
 ]
 DEFAULT_PUBLIC_ROUTES = [
     ("LuomoCore health", "luomocore/health", "luomocore", "GET", "/health", "luomocore:health"),
-    ("AstrBot OpenAPI", "astrbot/openapi", "astrbot", "GET", "/openapi.json", "astrbot:read"),
-    ("AstrBot plugins", "astrbot/plugins", "astrbot", "GET", "/astrbot/plugins", "astrbot:read"),
 ]
 
 

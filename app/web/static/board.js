@@ -9,6 +9,8 @@
   const every = Math.max(15, Number(board.dataset.refresh) || 30) * 1000;
   const note = board.querySelector('[data-board-note]');
   const noteText = note?.textContent || '';
+  const components = document.querySelector('[data-status-components]');
+  const freshness = document.querySelector('[data-status-freshness]');
   const TIMEOUT_MS = 10000;
   let timer = 0;
   let failures = 0;
@@ -32,9 +34,8 @@
     roundel.append(el('b', '', model.line?.letter || '?'), el('i', '', model.line?.number || '00'));
     const name = el('div', 'model', model.id);
     name.append(el('small', '', model.name !== model.id ? model.name : model.category));
-    const protocols = model.verification?.protocols?.length || 0;
     const use = el('div', 'use', model.category);
-    use.append(el('small', '', protocols ? `已实测 ${protocols} 种协议` : model.text_candidate ? '可计费 · 待本站实测' : '—'));
+    use.append(el('small', '', model.note || '—'));
     item.append(roundel, name, use, el('span', `lamp ${model.state?.tone || 'off'}`, model.state?.label || '—'));
     return item;
   }
@@ -47,7 +48,31 @@
   ].join('|');
 
   function render(data) {
-    const models = (Array.isArray(data.models) ? data.models : []).slice(0, limit || undefined);
+    const stamp = new Date(data.updated_at);
+    if (!Array.isArray(data.models) || typeof data.updated_at !== 'string' || Number.isNaN(stamp.getTime()) || typeof data.status !== 'string') throw new Error('Invalid catalog snapshot');
+    // Build the overview before committing any part of this snapshot to the page.
+    const cards = document.createDocumentFragment();
+    if (components) {
+      if (!Array.isArray(data.components) || !data.components.length || !Number.isFinite(data.cache_seconds) || typeof data.note !== 'string') throw new Error('Incomplete status snapshot');
+      data.components.forEach(component => {
+        if (!component || typeof component.name !== 'string' || typeof component.status !== 'string' || typeof component.detail !== 'string') throw new Error('Invalid status component');
+        const tone = component.status === 'operational' ? 'ok' : component.status === 'degraded' ? 'warn' : 'off';
+        const label = component.status === 'operational' ? '正常' : component.status === 'degraded' ? '异常' : component.status || '—';
+        const card = el('article', `card status-card ${tone}`);
+        const top = el('div', 'status-top');
+        const lamp = el('span', `signal-lamp ${tone}`);
+        lamp.setAttribute('aria-hidden', 'true');
+        top.append(lamp, el('span', `badge ${tone}`, label));
+        card.append(top, el('h2', '', component.name), el('p', 'muted', component.detail));
+        if (component.latency_ms !== null && component.latency_ms !== undefined) {
+          const metric = el('p', 'metric-inline');
+          metric.append(el('span', 'num', component.latency_ms), ' ms 响应');
+          card.append(metric);
+        }
+        cards.append(card);
+      });
+    }
+    const models = data.models.slice(0, limit || undefined);
     const current = new Map([...list.children].map(item => [item.dataset.model, item]));
     const next = models.map(model => {
       const fresh = row(model);
@@ -62,13 +87,24 @@
     if (count) count.textContent = data.model_count ?? models.length;
     board.querySelector('[data-board-more]')?.toggleAttribute('hidden', !data.model_count);
     const clock = board.querySelector('[data-board-clock]');
-    const stamp = new Date(data.updated_at);
     if (clock && !Number.isNaN(stamp.getTime())) {
       clock.setAttribute('datetime', data.updated_at);
       clock.textContent = stamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     }
     const status = document.querySelector('[data-line-status]');
     if (status) status.textContent = data.status === 'operational' ? '全线正常运行' : '部分线路异常';
+    if (components) {
+      components.replaceChildren(cards);
+      const updated = document.querySelector('[data-status-updated]');
+      if (updated) {
+        updated.setAttribute('datetime', data.updated_at);
+        updated.textContent = stamp.toISOString().slice(0, 16).replace('T', ' ');
+      }
+      const cache = document.querySelector('[data-status-cache]');
+      if (cache) cache.textContent = data.cache_seconds;
+      const scope = document.querySelector('[data-status-note]');
+      if (scope) scope.textContent = data.note;
+    }
     const billable = document.querySelector('[data-line-billable]');
     if (billable && Number.isFinite(data.billable_count)) billable.textContent = data.billable_count;
   }
@@ -101,12 +137,14 @@
       if (generation !== latest) return;
       render(data);
       failures = 0;
+      if (freshness) freshness.hidden = true;
       flash('刚刚更新', 'is-fresh');
       setTimeout(() => { if (!failures) flash(noteText, ''); }, 2400);
     } catch {
       if (generation !== latest) return;
       failures += 1;
-      flash('暂时无法刷新', 'is-stale');
+      if (freshness) freshness.hidden = false;
+      flash('刷新失败 · 数据已陈旧', 'is-stale');
     } finally {
       clearTimeout(deadline);
       inFlight = false;

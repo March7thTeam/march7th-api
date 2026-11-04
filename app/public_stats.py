@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.ai_catalog import snapshot
 from app.auth import optional_user
@@ -87,9 +88,12 @@ def security_text() -> str:
 
 @router.get("/")
 async def public_home(request: Request, user=Depends(optional_user)):
-    return templates.TemplateResponse(request, "index.html", {"user": user, "catalog": await snapshot(), "routes": get_public_routes(), **get_public_route_stats()})
+    # Route lookups are synchronous SQLite reads; keep them off the event loop.
+    routes, stats = await run_in_threadpool(lambda: (get_public_routes(), get_public_route_stats()))
+    return templates.TemplateResponse(request, "index.html", {"user": user, "catalog": await snapshot(), "routes": routes, **stats})
 
 
 @router.get("/docs")
-def public_docs(request: Request, user=Depends(optional_user)):
-    return templates.TemplateResponse(request, "docs.html", {"user": user, "routes": get_public_routes(), **get_public_route_stats()})
+async def public_docs(request: Request, user=Depends(optional_user)):
+    routes, stats = await run_in_threadpool(lambda: (get_public_routes(), get_public_route_stats()))
+    return templates.TemplateResponse(request, "docs.html", {"user": user, "catalog": await snapshot(), "routes": routes, **stats})

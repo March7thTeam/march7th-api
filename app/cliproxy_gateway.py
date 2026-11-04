@@ -24,8 +24,9 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from app.auth import api_user_eligible
 from app.admin_key_policy import AdminKeyPolicyError, admin_unmetered
-from app.credit_pricing import PricingError, billing_details, billing_receipt_present, prepare_billable_request
-from app.credit_ledger import mark_credit_dispatched
+from app.credit_pricing import (AUTO_OUTPUT_TIERS, DEFAULT_OUTPUT_TOKENS, PricingError, billing_details, billing_receipt_present,
+                                output_limit_requested, prepare_billable_request)
+from app.credit_ledger import mark_credit_dispatched, wallet_snapshot
 
 from app.ai_usage import (
     SSEUsageParser,
@@ -104,17 +105,44 @@ class MeteredStreamingResponse(StreamingResponse):
                     await self.on_unstarted_disconnect()
 
 
+PREGENERATION_ERROR_CODES = {400: {"context_length_exceeded"}, 401: {"invalid_api_key"},
+                              403: {"model_access_denied"}, 404: {"model_not_found"},
+                              429: {"rate_limit_exceeded", "insufficient_quota"}}
+# CodexProxy (CLIProxyAPI) answers this before contacting the model provider when no
+# usable credential exists: 401 with code auth_unavailable, or 503 whose message
+# starts with "auth_unavailable:" (code internal_server_error).
+PROXY_AUTH_UNAVAILABLE_STATUSES = {401, 503}
+
+
 def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str) -> bool:
     """Only specific, structured pre-generation errors can release a hold."""
-    allowed = {400: {"context_length_exceeded"}, 401: {"invalid_api_key"},
-               403: {"model_access_denied"}, 404: {"model_not_found"}}
     if not isinstance(payload, dict) or billing_receipt_present(payload, protocol=protocol):
         return False
     if any(payload.get(key) for key in ("choices", "output", "response", "content")):
         return False
     error = payload.get("error")
-    return (isinstance(error, dict) and isinstance(error.get("code"), str)
-            and error["code"] in allowed.get(status_code, set()))
+    if not isinstance(error, dict):
+        return False
+    code, message = error.get("code"), error.get("message")
+    if isinstance(code, str) and code in PREGENERATION_ERROR_CODES.get(status_code, set()):
+        return True
+    return status_code in PROXY_AUTH_UNAVAILABLE_STATUSES and (
+        code == "auth_unavailable" or (isinstance(message, str) and message.startswith("auth_unavailable:")))
+
+
+def _available_credit_units(user_id: int) -> int:
+    """Advisory read used only to size an unspecified output limit; the reservation re-checks atomically."""
+    with closing(connect()) as conn:
+        return int(wallet_snapshot(conn, int(user_id))["available_units"])
+
+
+def _auto_output_limit(payload: dict, protocol: str, available_units: int) -> int:
+    """Largest automatic output tier whose worst-case reservation the caller can afford."""
+    for tier in AUTO_OUTPUT_TIERS:
+        _, quote = prepare_billable_request(payload, protocol=protocol, default_output_tokens=tier)
+        if quote.amount_units <= available_units:
+            return tier
+    return DEFAULT_OUTPUT_TOKENS
 
 
 def _request_id(request: Request) -> str:
@@ -626,7 +654,12 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
                 return json_error(403, "permission_error", "API key authorization changed; retry the request.", request_id=request_id, code="authorization_changed")
             try:
                 if not expected_admin_unmetered:
-                    payload, billing_quote = prepare_billable_request(payload, protocol=ENDPOINT_PROTOCOLS[endpoint])
+                    billing_protocol = ENDPOINT_PROTOCOLS[endpoint]
+                    default_limit = DEFAULT_OUTPUT_TOKENS
+                    if not output_limit_requested(payload, protocol=billing_protocol):
+                        available = await run_in_threadpool(_available_credit_units, key_row["user_id"])
+                        default_limit = _auto_output_limit(payload, billing_protocol, available)
+                    payload, billing_quote = prepare_billable_request(payload, protocol=billing_protocol, default_output_tokens=default_limit)
                 elif endpoint == "/v1/chat/completions" and payload.get("stream") is True:
                     options = payload.get("stream_options")
                     if options is None or isinstance(options, dict):

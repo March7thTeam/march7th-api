@@ -272,7 +272,7 @@ class InterchangeTests(unittest.TestCase):
         from app.model_lines import board_state
         self.assertEqual(board_state("gpt-6-luna", True)["tone"], "ok")
         self.assertEqual(board_state("gpt-image-2", False)["tone"], "off")
-        self.assertEqual(board_state("codex-auto-review", False)["label"], "未计价")
+        self.assertEqual(board_state("codex-auto-review", False)["label"], "暂未计价")
 
     def test_admin_cannot_change_own_status(self):
         name, user_id = _user("self_admin", role="admin")

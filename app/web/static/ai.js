@@ -5,7 +5,7 @@
     if (!$('config-code')) return;
     const base = $('ai-base').textContent;
     const appName = $('config-code').dataset.appName;
-    const model = $('config-model').value.trim() || 'gpt-6-luna';
+    const model = $('config-model').value.trim() || $('config-model').defaultValue;
     const quoted = JSON.stringify(model);
     const payload = JSON.stringify({model, messages: [{role: 'user', content: '你好'}], stream: false}, null, 2);
     const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'";

@@ -5,7 +5,7 @@
 {% block head_extra %}<script src="{{ asset('ai.js') }}" defer></script>{% endblock %}
 {% block page %}
 <div class="page-head">
-  <div><p class="eyebrow">Lines · 模型线路</p><h1>选一条线路，接上就走。</h1><p class="lead">统一地址、明确权限、可复制的配置。目录每 30 秒从上游刷新一次，当前 {{ catalog.model_count }} 条线路中 {{ catalog.billable_count|default(0) }} 条可用积分调用。</p></div>
+  <div><p class="eyebrow">Lines · 模型线路</p><h1>选一条线路，接上就走。</h1><p class="lead">统一地址、明确权限、可复制的配置。目录每 30 秒从上游刷新一次，当前 {{ catalog.model_count }} 条线路中 {{ catalog.billable_count|default(0) }} 条可调用。</p></div>
   <div class="actions">{% if user %}<a class="btn primary" href="/developer/playground">在线试用 <span class="arrow" aria-hidden="true">→</span></a>{% else %}<a class="btn primary" href="/register">领取密钥 <span class="arrow" aria-hidden="true">→</span></a>{% endif %}<a class="btn" href="/pricing">价格</a></div>
 </div>
 
@@ -32,9 +32,9 @@
   {% set line = line_for(model.id) %}
   <article class="line-card {{ '' if model.text_candidate else 'muted-card' }}" data-line="{{ line.family }}">
     <div class="top">{{ roundel(model.id, 'lg') }}<div><h3>{{ model.name }}</h3><div class="id">{{ model.id }}</div></div></div>
-    <div class="chips"><span class="chip">{{ model.category }}</span>{% if model.text_candidate %}<span class="badge ok">可计费</span>{% elif model.id.startswith('gpt-image-') %}<span class="badge off">接口未开放</span>{% else %}<span class="badge warn">暂未计价</span>{% endif %}</div>
+    <div class="chips"><span class="chip">{{ model.category }}</span><span class="badge {{ model.state.tone }}">{{ model.state.label }}</span></div>
     <p>{{ model.use }}</p>
-    <div class="verify">{% if model.verification %}<strong>已实测</strong> {{ model.verification.protocols|join(' · ') }}<br><span class="mono">{{ model.verification.checked_at[:10] }}</span>{% else %}尚无本站生成实测记录{% endif %}</div>
+    <div class="verify">{% if model.verification %}<strong>已实测</strong> {{ model.verification.protocols|join(' · ') }}<br><span class="mono">{{ model.verification.checked_at[:10] }}</span>{% else %}{{ model.note }}{% endif %}</div>
     {% if model.text_candidate %}<div class="foot"><button class="btn sm" type="button" data-select-model="{{ model.id }}">用它生成配置 <span class="arrow" aria-hidden="true">↓</span></button></div>{% endif %}
   </article>
   {% else %}
@@ -46,7 +46,7 @@
 <section id="configuration" class="section-gap">
   <div class="block-title"><h2>带着配置出发</h2></div>
   <div class="form two config-form">
-    <label class="field">模型 ID<input id="config-model" class="mono" list="text-models" value="gpt-6-luna" autocomplete="off" spellcheck="false"></label>
+    <label class="field">模型 ID<input id="config-model" class="mono" list="text-models" value="{{ catalog.default_model or 'gpt-6-luna' }}" autocomplete="off" spellcheck="false"></label>
     <datalist id="text-models">{% for model in catalog.models if model.text_candidate %}<option value="{{ model.id }}">{% endfor %}</datalist>
     <label class="field">示例格式<select id="config-client"><option value="curl">cURL · Chat Completions</option><option value="responses">cURL · Responses</option><option value="python">Python · OpenAI SDK</option><option value="javascript">JavaScript · OpenAI SDK</option><option value="airi">AIRI / 通用客户端</option></select></label>
   </div>

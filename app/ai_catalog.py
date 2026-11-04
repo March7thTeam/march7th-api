@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import settings
 from app.credit_pricing import priced_models
 from app.db import connect
-from app.model_lines import board_state, line_for
+from app.model_lines import board_state, line_for, verification_note
 
 GUIDANCE = {
     "gpt-6-luna": ("Luna", "轻快交互", "聊天、明确的小任务、重复性工作；新接入建议从这里开始。"),
@@ -25,6 +25,9 @@ GUIDANCE = {
     "gpt-5.3-codex-spark": ("Codex Spark", "快速文本", "快速编码交互；不要用于图像输入。"),
     "gpt-5.5": ("GPT-5.5", "兼容选择", "已有集成的兼容选择，可与新模型对比后使用。"),
 }
+# Examples and form defaults use the first of these that the upstream currently offers.
+DEFAULT_MODEL_PREFERENCE = ("gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol")
+FALLBACK_DEFAULT_MODEL = "gpt-6-luna"
 _cache = None
 _expires = 0.0
 _lock = asyncio.Lock()
@@ -56,6 +59,11 @@ def public_verification(data, model_id):
     except (KeyError, TypeError, AttributeError, ValueError):
         return {}
     return {"protocols": protocols, "checked_at": checked_at} if protocols else {}
+
+
+def default_model(entries) -> str:
+    callable_ids = [entry["id"] for entry in entries if entry["text_candidate"]]
+    return next((model for model in DEFAULT_MODEL_PREFERENCE if model in callable_ids), callable_ids[0] if callable_ids else FALLBACK_DEFAULT_MODEL)
 
 
 async def snapshot():
@@ -103,13 +111,14 @@ async def snapshot():
             if model_id.startswith("gpt-image-"):
                 category, use = "图像模型", "当前网关未开放图像生成接口，不能直接用于文本示例。"
             elif not billable:
-                category, use = "暂未计价", "上游列出的模型，但没有官方标准文本价格；个人密钥暂不能调用。"
+                use = "上游列出的模型，但没有官方标准文本价格；个人密钥暂不能调用。"
             text_candidate = billable and not model_id.startswith("gpt-image-")
+            checked = public_verification(verification, model_id)
             entries.append({"id": model_id, "name": name, "category": category, "use": use, "billable": billable,
                             "text_candidate": text_candidate, "line": line_for(model_id), "state": board_state(model_id, text_candidate),
-                            "verification": public_verification(verification, model_id)})
+                            "verification": checked, "note": verification_note(checked, text_candidate)})
         _cache = {"service": "LuomoAPI Hub", "version": "2026.10-interchange-t001", "status": "operational" if db_ok and upstream_ok else "degraded", "updated_at": checked_at, "cache_seconds": 30,
                   "components": [{"name": "网关应用", "status": "operational", "detail": "当前 HTTP 请求已到达应用"}, {"name": "数据库", "status": "operational" if db_ok else "degraded", "detail": "只读查询成功" if db_ok else "查询失败"}, {"name": "AI 上游目录", "status": "operational" if upstream_ok else "degraded", "detail": reason, "latency_ms": latency}],
-                  "models": entries, "model_count": len(models), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。", **counts}
+                  "models": entries, "model_count": len(models), "default_model": default_model(entries), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。", **counts}
         _expires = time.monotonic() + 30
         return _cache

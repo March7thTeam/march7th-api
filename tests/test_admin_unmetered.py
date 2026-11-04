@@ -164,7 +164,7 @@ class AdminUnmeteredTests(unittest.TestCase):
         self.assertEqual(self.generate().status_code, 402)
         self.fund()
         payload = self.request_payload()
-        payload["max_completion_tokens"] = 50000
+        payload["max_completion_tokens"] = 128001
         self.assertEqual(self.post("chat", payload).status_code, 400)
         payload.update(model=UNKNOWN_MODEL, max_completion_tokens=8)
         self.assertEqual(self.post("chat", payload).status_code, 400)

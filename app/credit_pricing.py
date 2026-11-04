@@ -12,8 +12,11 @@ import posixpath
 PRICE_DATA = json.loads(Path(__file__).with_name("credit_prices.json").read_text(encoding="utf-8"))
 UNITS_PER_CREDIT = 1_000_000
 CREDITS_PER_USD = 720
-MAX_OUTPUT_TOKENS = 8192
+MAX_OUTPUT_TOKENS = 128_000
 DEFAULT_OUTPUT_TOKENS = 2048
+# When the caller sets no output limit, the gateway picks the largest of these the
+# caller's available credits can reserve (falling back to DEFAULT_OUTPUT_TOKENS).
+AUTO_OUTPUT_TIERS = (32768, 16384, 8192, 4096, DEFAULT_OUTPUT_TOKENS)
 MAX_TOKEN_COUNT = 10_000_000
 
 
@@ -81,7 +84,15 @@ def _reject_nontext(value: Any) -> None:
             _reject_nontext(child)
 
 
-def prepare_billable_request(payload: dict, *, protocol: str) -> tuple[dict, BillingQuote]:
+def output_limit_requested(payload: Any, *, protocol: str) -> bool:
+    """True when the caller chose an output limit itself (the gateway must honour it)."""
+    if not isinstance(payload, dict):
+        return False
+    keys = ("max_tokens", "max_completion_tokens") if protocol == "chat.completions" else ("max_output_tokens",)
+    return any(key in payload for key in keys)
+
+
+def prepare_billable_request(payload: dict, *, protocol: str, default_output_tokens: int = DEFAULT_OUTPUT_TOKENS) -> tuple[dict, BillingQuote]:
     card = model_price(payload["model"])
     # Copy through JSON: neither the caller nor the quote may mutate after admission.
     outgoing = json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False))
@@ -104,7 +115,7 @@ def prepare_billable_request(payload: dict, *, protocol: str) -> tuple[dict, Bil
         limits = [outgoing[k] for k in ("max_tokens", "max_completion_tokens") if k in outgoing]
         if len(limits) == 2 and limits[0] != limits[1]:
             raise PricingError("billing_limit_invalid", "Use only one output token limit.")
-        limit = limits[0] if limits else DEFAULT_OUTPUT_TOKENS
+        limit = limits[0] if limits else default_output_tokens
         outgoing.pop("max_tokens", None)
         outgoing["max_completion_tokens"] = limit
         if outgoing.get("stream") is True:
@@ -113,7 +124,7 @@ def prepare_billable_request(payload: dict, *, protocol: str) -> tuple[dict, Bil
                 raise PricingError("billing_shape_unsupported", "stream_options must be an object.")
             outgoing["stream_options"] = {**options, "include_usage": True}
     else:
-        limit = outgoing.get("max_output_tokens", DEFAULT_OUTPUT_TOKENS)
+        limit = outgoing.get("max_output_tokens", default_output_tokens)
         outgoing["max_output_tokens"] = limit
         outgoing["store"] = False
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_OUTPUT_TOKENS:

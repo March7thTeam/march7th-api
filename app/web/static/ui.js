@@ -104,13 +104,41 @@
     filters.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
     applyFilter();
   }));
-  if (search) applyFilter();
+  function revealRoute(hash) {
+    let id;
+    try { id = decodeURIComponent(hash.slice(1)); } catch { return; }
+    const target = document.getElementById(id);
+    if (!routes.includes(target)) return;
+    const query = (search?.value || '').trim().toLowerCase();
+    if (search && !(target.dataset.search || '').toLowerCase().includes(query)) search.value = '';
+    if (filter !== 'all' && filter !== target.dataset.status) {
+      filter = 'all';
+      filters.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.routeFilter === filter)));
+    }
+    applyFilter();
+    if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: 'start' });
+  }
+  $('.docs-nav')?.addEventListener('click', event => {
+    const link = event.target.closest('a[href^="#endpoint-"]');
+    if (link && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) revealRoute(link.hash);
+  });
+  if (search) {
+    applyFilter();
+    revealRoute(location.hash);
+    window.addEventListener('hashchange', () => revealRoute(location.hash));
+  }
 
   // Fare estimator: credits per 1M tokens come from the server-rendered price options.
   const estimator = $('#estimator');
   if (estimator) {
     const [model, input, cached, output] = ['est-model', 'est-input', 'est-cached', 'est-output'].map(id => document.getElementById(id));
-    const format = (value, digits) => Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: digits }) : '—';
+    const format = (value, prefix = '') => {
+      if (!Number.isFinite(value)) return '—';
+      if (value > 0 && value < 0.000001) return `<${prefix}0.000001`;
+      return prefix + value.toLocaleString('zh-CN', { maximumFractionDigits: 6 });
+    };
     const update = () => {
       const option = model.selectedOptions[0]; if (!option) return;
       const read = field => Math.max(0, Number(field.value) || 0);
@@ -118,9 +146,9 @@
       const rate = name => Number(option.dataset[name]);
       const cachedRate = option.dataset.cached ? rate('cached') : rate('input');
       const credits = ((inTokens - cachedTokens) * rate('input') + cachedTokens * cachedRate + outTokens * rate('output')) / 1e6;
-      $('#est-credits').textContent = format(credits, 4);
-      $('#est-usd').textContent = '$' + format(credits / 720, 5);
-      $('#est-cny').textContent = '¥' + format(credits / 100, 4);
+      $('#est-credits').textContent = format(credits);
+      $('#est-usd').textContent = format(credits / 720, '$');
+      $('#est-cny').textContent = format(credits / 100, '¥');
     };
     estimator.addEventListener('input', update);
     estimator.addEventListener('submit', event => event.preventDefault());

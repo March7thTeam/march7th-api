@@ -29,7 +29,7 @@
         <li>在 <a href="/developer/credits">积分</a> 页面兑换积分（兑换码或管理员加分）。</li>
         <li>把客户端的 base_url 设为 <code>{{ app_base_url }}/v1</code>，发起第一次请求：</li>
       </ol>
-      {{ sdk_screen(id='docs-sdk') }}
+      {{ sdk_screen(model=catalog.default_model or 'gpt-6-luna', id='docs-sdk') }}
     </section>
 
     <section id="authentication">
@@ -53,7 +53,7 @@
           <tr><td><code>POST /v1/responses</code></td><td>Responses 协议，支持 SSE；不支持远端会话检索</td><td><code>responses:create</code></td></tr>
         </tbody>
       </table></div></div>
-      <p class="section-note">支持文本与客户端函数工具；单次输出默认 2048、上限 8192 token。流式请求可加 <code>stream_options.include_usage</code> 获取最终用量。每个响应带 <code>X-Request-ID</code>，排查问题时请一并提供。模型用途与配置示例见 <a href="/models">模型线路</a>。</p>
+      <p class="section-note">支持文本与客户端函数工具；单次输出上限 128,000 token。未指定上限时，按你的可用积分自动放宽到最多 32,768（至少 2,048）；需要更长输出请显式设置 <code>max_tokens</code> / <code>max_output_tokens</code>。流式请求可加 <code>stream_options.include_usage</code> 获取最终用量。每个响应带 <code>X-Request-ID</code>，排查问题时请一并提供。模型用途与配置示例见 <a href="/models">模型线路</a>。</p>
     </section>
 
     <section id="billing">
@@ -62,7 +62,7 @@
       <ul>
         <li>每次生成先按输入估算和输出上限冻结预算，完成后按上游回报的真实 token 结算，多退少补。</li>
         <li>缓存命中与长上下文使用对应价格档位；读取模型目录不收费。</li>
-        <li>余额不足时返回 <code>402</code>；缺少可靠用量的请求只保留本笔冻结并进入待核。</li>
+        <li>余额不足时返回 <code>402</code>；上游在生成前就拒绝的请求（如上游凭据暂不可用、限流）不扣费，冻结立即释放；缺少可靠用量的其他请求只保留本笔冻结并进入待核。</li>
         <li>兑换码、管理员加分与在线充值（开放后）共用同一余额。</li>
       </ul>
       <a class="btn sm" href="/pricing">查看价格与估算器</a>

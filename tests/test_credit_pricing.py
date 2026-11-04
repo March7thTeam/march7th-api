@@ -75,7 +75,7 @@ class CreditPricingTests(unittest.TestCase):
         shapes=[{"previous_response_id":"resp_x"},{"conversation":"conv_x"},{"prompt":{"id":"pmpt_x"}},
             {"input":[{"type":"item_reference","id":"msg_x"}]},{"background":True},
             {"tools":[{"type":"web_search"}]},{"input":[{"type":"input_image","image_url":"https://example.test/i.png"}]},
-            {"n":2},{"service_tier":"priority"},{"max_output_tokens":8193}]
+            {"n":2},{"service_tier":"priority"},{"max_output_tokens":128001}]
         for shape in shapes:
             with self.subTest(shape=shape),self.assertRaises(PricingError):
                 prepare_billable_request({"model":"gpt-6-luna","input":"hello",**shape},protocol="responses")

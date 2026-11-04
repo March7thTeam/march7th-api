@@ -11,7 +11,7 @@
 <li class="board-row" data-model="{{ model.id }}">
   {{ roundel(model.id) }}
   <div class="model">{{ model.id }}<small>{{ model.name if model.name != model.id else model.category }}</small></div>
-  <div class="use">{{ model.category }}<small>{% if model.verification %}已实测 {{ model.verification.protocols|length }} 种协议{% elif model.text_candidate %}可计费 · 待本站实测{% else %}—{% endif %}</small></div>
+  <div class="use">{{ model.category }}<small>{{ model.note }}</small></div>
   {{ model_state(model) }}
 </li>
 {%- endmacro %}

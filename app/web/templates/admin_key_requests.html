@@ -19,7 +19,7 @@
     {% if item.status == 'pending' %}
     <form method="post" action="/admin/key-requests/{{ item.id }}/approve" class="form two section-note">
       <label class="field">权限范围<input name="scopes" class="mono" value="{{ item.requested_scopes or 'models:read,chat:completions' }}"></label>
-      <label class="field">允许的模型 ID（逗号分隔）<input name="models" class="mono" placeholder="gpt-6-luna,gpt-6-sol"></label>
+      <label class="field">允许的模型 ID（逗号分隔）<input name="models" class="mono" placeholder="gpt-6-sol,gpt-5.6-luna"></label>
       <label class="field">每分钟请求数（0 不限）<input name="rate_limit_per_minute" type="number" min="0" value="60"></label>
       <label class="field">每日请求数（0 不限）<input name="daily_quota" type="number" min="0" value="1000"></label>
       <label class="field">每月请求数（0 不限）<input name="monthly_quota" type="number" min="0" value="30000"></label>

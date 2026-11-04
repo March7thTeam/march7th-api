@@ -8,7 +8,7 @@
       <div class="plate">
         <span class="roundel lg hub" aria-hidden="true"><b>IX</b><i>00</i></span>
         <h1 class="name"><span class="zh">换乘枢纽</span><span class="en">Interchange · {{ app_authority }}</span></h1>
-        <div class="status"><strong data-line-status>{{ '全线正常运行' if catalog.status == 'operational' else '部分线路异常' }}</strong><span data-line-billable>{{ catalog.billable_count|default(0) }}</span> 条可计费线路<br><a href="/status">查看状态 →</a></div>
+        <div class="status"><strong data-line-status>{{ '全线正常运行' if catalog.status == 'operational' else '部分线路异常' }}</strong><span data-line-billable>{{ catalog.billable_count|default(0) }}</span> 条可调用线路<br><a href="/status">查看状态 →</a></div>
       </div>
       <div class="bar"><a href="https://luomo.moe"><span aria-hidden="true">←</span> 夜行线 <small>luomo.moe</small></a><span class="here" aria-hidden="true"></span><a href="https://file.luomo.moe">文件星港 <small>file.luomo.moe</small> <span aria-hidden="true">→</span></a></div>
     </div>
@@ -49,12 +49,12 @@
       <p class="muted-lead">官方 OpenAI SDK、AIRI 等「OpenAI 兼容」客户端都能直接使用。</p>
       <ul class="check-list">
         <li><strong>两种协议</strong>：<code>/v1/chat/completions</code> 与 <code>/v1/responses</code>，均支持 SSE 流式。</li>
-        <li><strong>文本与函数工具</strong>：单次输出默认 2048、上限 8192 token。</li>
+        <li><strong>文本与函数工具</strong>：单次输出上限 128k token；不指定时按可用积分自动放宽，最多 32k。</li>
         <li><strong>可追溯</strong>：每个响应带 <code>X-Request-ID</code>，控制台按请求 ID 定位结果与扣费。</li>
       </ul>
       <a class="text-link" href="/models#configuration">生成你的客户端配置</a>
     </div>
-    {{ sdk_screen() }}
+    {{ sdk_screen(model=catalog.default_model or 'gpt-6-luna') }}
   </div>
 </section>
 
