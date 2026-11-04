@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}系统设置 · LuomoAPI{% endblock %}
+{% block title %}系统设置 · {{ app_name }}{% endblock %}
 {% block content %}
 {% set names = {'Database':'数据库文件','App port':'应用端口','Session secret':'会话密钥','Admin':'管理员账户','Environment':'运行环境','AstrBot credential':'AstrBot 凭据','LuomoCore credential':'LuomoCore 凭据','SMTP host':'SMTP 主机','SMTP username':'SMTP 用户名','SMTP password':'SMTP 密码','Email verification TTL hours':'验证链接有效期（小时）'} %}
 <div class="page-head"><div><p class="eyebrow">Settings · 系统设置</p><h1>系统设置</h1><p class="lead">当前配置状态，不展示敏感值。修改需在服务器环境变量中进行。</p></div></div>

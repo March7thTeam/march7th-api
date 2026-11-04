@@ -1,6 +1,6 @@
-# LuomoAPI Hub
+# march7th api
 
-LuomoAPI Hub 是洛墨站的自托管 API 网关，线上运行于 <https://api.luomo.moe>。它同时做两件事：
+march7th api 是洛墨站的自托管 API 网关，线上运行于 <https://api.march7th.cn>。它同时做两件事：
 
 - **模型换乘**：对外提供 OpenAI 兼容的 `/v1` 入口，按 key 授权模型、限速并用积分计费；
 - **API 目录**：管理员登记内部上游与固定路由，开发者申请带 scope 的 key，经 `/api/public/v1/...` 受控调用。
@@ -48,13 +48,13 @@ OpenAI 官方 SDK 只需改 `base_url`：
 import os
 from openai import OpenAI
 
-client = OpenAI(base_url="https://api.example.com/v1", api_key=os.environ["LUOMO_API_KEY"])
+client = OpenAI(base_url="https://api.march7th.cn/v1", api_key=os.environ["LUOMO_API_KEY"])
 response = client.responses.create(model="gpt-6-luna", input="你好")
 print(response.output_text)
 ```
 
 ```bash
-curl https://api.example.com/v1/chat/completions \
+curl https://api.march7th.cn/v1/chat/completions \
   -H "Authorization: Bearer $LUOMO_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-6-luna", "messages": [{"role": "user", "content": "你好"}]}'

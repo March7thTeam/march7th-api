@@ -47,7 +47,7 @@
 <span class="k">from</span> openai <span class="k">import</span> OpenAI
 
 client = OpenAI(
-    base_url=<span class="s">"https://api.luomo.moe/v1"</span>,
+    base_url=<span class="s">"{{ app_base_url }}/v1"</span>,
     api_key=os.environ[<span class="s">"LUOMO_API_KEY"</span>],
 )
 reply = client.chat.completions.create(
@@ -59,7 +59,7 @@ print(reply.choices[0].message.content)</pre>
 <span class="k">import</span> OpenAI <span class="k">from</span> <span class="s">'openai'</span>;
 
 <span class="k">const</span> client = <span class="k">new</span> OpenAI({
-  baseURL: <span class="s">'https://api.luomo.moe/v1'</span>,
+  baseURL: <span class="s">'{{ app_base_url }}/v1'</span>,
   apiKey: process.env.LUOMO_API_KEY,
 });
 <span class="k">const</span> reply = <span class="k">await</span> client.chat.completions.create({
@@ -67,7 +67,7 @@ print(reply.choices[0].message.content)</pre>
   messages: [{ role: <span class="s">'user'</span>, content: <span class="s">'你好'</span> }],
 });
 console.log(reply.choices[0].message.content);</pre>
-<pre data-panel="curl" id="{{ id }}-curl" hidden><span class="k">curl</span> https://api.luomo.moe/v1/chat/completions \
+<pre data-panel="curl" id="{{ id }}-curl" hidden><span class="k">curl</span> {{ app_base_url }}/v1/chat/completions \
   -H <span class="s">"Authorization: Bearer $LUOMO_API_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
   -d <span class="s">'{"model": "{{ model }}", "messages": [{"role": "user", "content": "你好"}]}'</span></pre>

@@ -7,7 +7,7 @@
     <div class="station-sign">
       <div class="plate">
         <span class="roundel lg hub" aria-hidden="true"><b>IX</b><i>00</i></span>
-        <h1 class="name"><span class="zh">换乘枢纽</span><span class="en">Interchange · api.luomo.moe</span></h1>
+        <h1 class="name"><span class="zh">换乘枢纽</span><span class="en">Interchange · {{ app_authority }}</span></h1>
         <div class="status"><strong data-line-status>{{ '全线正常运行' if catalog.status == 'operational' else '部分线路异常' }}</strong><span data-line-billable>{{ catalog.billable_count|default(0) }}</span> 条可计费线路<br><a href="/status">查看状态 →</a></div>
       </div>
       <div class="bar"><a href="https://luomo.moe"><span aria-hidden="true">←</span> 夜行线 <small>luomo.moe</small></a><span class="here" aria-hidden="true"></span><a href="https://file.luomo.moe">文件星港 <small>file.luomo.moe</small> <span aria-hidden="true">→</span></a></div>
@@ -17,7 +17,7 @@
       <div>
         <h2 class="hero-title">一个地址，<br>换乘<mark>每一条模型线路</mark>。</h2>
         <p class="lead">OpenAI 兼容接口，把 base_url 换成下面这个就能接入。注册即领密钥，按官方标准价以积分结算，每次调用都有记录可查。</p>
-        <div class="url-plate"><span class="tag">BASE URL</span><code id="base-url">https://api.luomo.moe/v1</code><button type="button" data-copy-target="base-url">复制</button></div>
+        <div class="url-plate"><span class="tag">BASE URL</span><code id="base-url">{{ app_base_url }}/v1</code><button type="button" data-copy-target="base-url">复制</button></div>
         <div class="actions">
           {% if user %}<a class="btn primary" href="/developer/keys">去领取密钥 <span class="arrow" aria-hidden="true">→</span></a>{% else %}<a class="btn primary" href="/register">注册并领取密钥 <span class="arrow" aria-hidden="true">→</span></a>{% endif %}
           <a class="btn" href="/models">查看模型线路</a>

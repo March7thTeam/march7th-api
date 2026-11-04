@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}密钥申请 · LuomoAPI{% endblock %}
+{% block title %}密钥申请 · {{ app_name }}{% endblock %}
 {% block content %}
 {% set states = {'approved':('ok','已签发'),'pending':('warn','待审核'),'rejected':('off','已拒绝')} %}
 <div class="page-head"><div><p class="eyebrow">Requests · 密钥申请</p><h1>密钥申请</h1><p class="lead">自助签发的 AI 密钥会自动记为“已签发”。需要业务权限的申请在这里设置协议、模型、配额与有效期；完整密钥只显示一次。</p></div></div>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import roundel %}
-{% block title %}AI 用量 · LuomoAPI{% endblock %}
+{% block title %}AI 用量 · {{ app_name }}{% endblock %}
 {% block content %}
 {% set outcome_labels = {'succeeded':'成功','completed':'完成','failed':'失败','streamerror':'流式异常','stream_incomplete':'流未完整结束','client_disconnect':'客户端已断开','upstream_error':'上游异常','gateway_error':'网关异常','in_flight':'进行中','timeout':'超时'} %}
 {% set credit_labels = {'settled':'已结算','released':'已释放','held':'已冻结','reserved':'已冻结','reconciliation_required':'待核账','legacy_unbilled':'历史未计费','unbilled':'未计费','admin_exempt':'管理员免计费'} %}

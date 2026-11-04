@@ -9,7 +9,10 @@ async def security_headers(request: Request, call_next):
         source = request.headers.get("origin") or request.headers.get("referer", "")
         parsed = urlsplit(source)
         origin = f"{parsed.scheme}://{parsed.netloc}"
-        allowed = {settings.app_base_url.rstrip("/"), f"{request.url.scheme}://{request.url.netloc}"}
+        allowed = {f"{request.url.scheme}://{request.url.netloc}"}
+        if request.url.hostname in settings.https_api_hosts:
+            # The HTTPS tunnel can reach uvicorn over plain HTTP.
+            allowed.add(f"https://{request.url.netloc}")
         if origin not in allowed or request.headers.get("sec-fetch-site") == "cross-site":
             return JSONResponse({"detail": "页面来源校验失败，请返回本站页面重试。"}, status_code=403)
     response = await call_next(request)

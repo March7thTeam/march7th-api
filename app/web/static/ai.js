@@ -1,9 +1,10 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const base = 'https://api.luomo.moe/v1';
   function updateExample() {
     if (!$('config-code')) return;
+    const base = $('ai-base').textContent;
+    const appName = $('config-code').dataset.appName;
     const model = $('config-model').value.trim() || 'gpt-6-luna';
     const quoted = JSON.stringify(model);
     const payload = JSON.stringify({model, messages: [{role: 'user', content: '你好'}], stream: false}, null, 2);
@@ -13,7 +14,7 @@
       responses: `curl ${base}/responses \\\n  -H "Authorization: Bearer $LUOMO_API_KEY" \\\n  -H 'Content-Type: application/json' \\\n  -d ${shellQuote(JSON.stringify({model, input: '你好', stream: false}, null, 2))}`,
       python: `# pip install openai\nimport os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}",\n    api_key=os.environ["LUOMO_API_KEY"],\n)\nresponse = client.chat.completions.create(\n    model=${quoted},\n    messages=[{"role": "user", "content": "你好"}],\n)\nprint(response.choices[0].message.content)`,
       javascript: `// npm install openai · 在服务端运行\nimport OpenAI from 'openai';\nconst client = new OpenAI({\n  baseURL: '${base}',\n  apiKey: process.env.LUOMO_API_KEY,\n});\nconst response = await client.chat.completions.create({\n  model: ${quoted},\n  messages: [{ role: 'user', content: '你好' }],\n});\nconsole.log(response.choices[0].message.content);`,
-      airi: `提供商：OpenAI Compatible / OpenAI 兼容\nBase URL：${base}\nAPI Key：填写你自己的 LuomoAPI 密钥\n模型：${model}\n协议：Chat Completions\n\n需要权限：models:read, chat:completions\n模型白名单：${model}\n\n先保存提供商配置，再在聊天模块选择该提供商和模型。\n若测试报错，请检查 /v1 是否重复，以及密钥的权限与有效期。`
+      airi: `提供商：OpenAI Compatible / OpenAI 兼容\nBase URL：${base}\nAPI Key：填写你自己的 ${appName} 密钥\n模型：${model}\n协议：Chat Completions\n\n需要权限：models:read, chat:completions\n模型白名单：${model}\n\n先保存提供商配置，再在聊天模块选择该提供商和模型。\n若测试报错，请检查 /v1 是否重复，以及密钥的权限与有效期。`
     };
     $('config-code').textContent = examples[$('config-client').value];
   }

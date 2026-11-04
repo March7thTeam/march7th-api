@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import roundel %}
-{% block title %}价格 · LuomoAPI{% endblock %}
-{% block description %}LuomoAPI 按 OpenAI 官方 Standard 价格以积分结算：¥1 = 100 积分，$1 = 720 积分。附 token 费用估算器。{% endblock %}
+{% block title %}价格 · {{ app_name }}{% endblock %}
+{% block description %}{{ app_name }} 按 OpenAI 官方 Standard 价格以积分结算：¥1 = 100 积分，$1 = 720 积分。附 token 费用估算器。{% endblock %}
 {% macro price_cell(usd, credits) -%}
 {%- if usd is not none %}<span class="num">{{ credits|credit }}</span><span class="usd">${{ usd }}</span>{% else %}<span class="muted">—</span>{% endif -%}
 {%- endmacro %}

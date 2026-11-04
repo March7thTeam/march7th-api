@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.ai_catalog import snapshot
 from app.auth import optional_user
+from app.config import settings
 from app.db import connect
 from app.web.templating import templates
 
@@ -73,11 +74,11 @@ def security_text() -> str:
             "Contact: mailto:security@luomo.moe",
             "Contact: mailto:luomo0712@qq.com",
             "Preferred-Languages: zh, en",
-            "Canonical: https://api.luomo.moe/.well-known/security.txt",
-            "Policy: https://api.luomo.moe/security",
+            f"Canonical: {settings.app_base_url}/.well-known/security.txt",
+            f"Policy: {settings.app_base_url}/security",
             "",
-            "Scope: api.luomo.moe public portal, developer console, API key gateway, and LuomoAPI Hub account flows.",
-            "Out of scope: denial-of-service testing, social engineering, credential stuffing, destructive testing, and attempts against SSH, firewall, Cloudflare records outside api.luomo.moe, or unrelated Luomo services.",
+            f"Scope: {settings.app_authority} public portal, developer console, API key gateway, and {settings.app_name} account flows.",
+            f"Out of scope: denial-of-service testing, social engineering, credential stuffing, destructive testing, and attempts against SSH, firewall, Cloudflare records outside {settings.app_authority}, or unrelated Luomo services.",
             "Please do not include secrets, API keys, passwords, cookies, or private user data in reports.",
             "",
         ]

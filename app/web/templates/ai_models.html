@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import roundel %}
-{% block title %}模型线路 · LuomoAPI{% endblock %}
-{% block description %}LuomoAPI 当前可用的模型线路、用途、实测协议与客户端配置生成器。{% endblock %}
+{% block title %}模型线路 · {{ app_name }}{% endblock %}
+{% block description %}{{ app_name }} 当前可用的模型线路、用途、实测协议与客户端配置生成器。{% endblock %}
 {% block head_extra %}<script src="{{ asset('ai.js') }}" defer></script>{% endblock %}
 {% block page %}
 <div class="page-head">
@@ -12,7 +12,7 @@
 <div class="grid two">
   <section class="card">
     <p class="kicker">Base URL</p>
-    <div class="url-plate"><span class="tag">V1</span><code id="ai-base">https://api.luomo.moe/v1</code><button type="button" data-copy-target="ai-base">复制</button></div>
+    <div class="url-plate"><span class="tag">V1</span><code id="ai-base">{{ app_base_url }}/v1</code><button type="button" data-copy-target="ai-base">复制</button></div>
     <p class="muted model-note">客户端选择 <strong>OpenAI Compatible</strong>，填入个人 API Key 与准确的模型 ID；地址末尾的 <code>/v1</code> 只写一次。</p>
   </section>
   <section class="card">
@@ -52,7 +52,7 @@
   </div>
   <div class="screen config-screen">
     <div class="screen-bar"><span class="title" id="config-label">连接示例</span><button class="copy" type="button" data-copy-target="config-code">复制</button></div>
-    <pre id="config-code"></pre>
+    <pre id="config-code" data-app-name="{{ app_name }}"></pre>
   </div>
   <p class="muted small section-note">示例使用环境变量 <code>LUOMO_API_KEY</code>，请换成你自己的密钥并放在服务端。AIRI 若启用视觉、语音或工具，仍需分别配置对应服务；这里只配置聊天。</p>
 </section>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}领取 API 密钥 · LuomoAPI{% endblock %}
+{% block title %}领取 API 密钥 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><p class="eyebrow">Issued · 已出票</p><h1>{{ '这张票已经出过了' if result.duplicate else '你的 API 密钥已就绪' }}</h1><p class="lead">{{ '刷新或重复提交不会再次签发。' if result.duplicate else '完整密钥只在这一页显示一次，请现在复制并保存到密码管理器。' }}</p></div></div>
 {% if result.raw_key %}

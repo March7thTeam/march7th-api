@@ -44,7 +44,7 @@ def send_verification_email(email: str, username: str, token: str) -> None:
 
     link = verification_link(token)
     message = EmailMessage()
-    message["Subject"] = "验证你的 LuomoAPI 邮箱 · Verify your LuomoAPI email"
+    message["Subject"] = f"验证你的 {settings.app_name} 邮箱 · Verify your {settings.app_name} email"
     message["From"] = settings.smtp_from
     message["To"] = email
     hours = settings.email_verification_ttl_hours
@@ -53,14 +53,14 @@ def send_verification_email(email: str, username: str, token: str) -> None:
             [
                 f"{username}，你好：",
                 "",
-                "请打开下面的链接，确认这个邮箱属于你的 LuomoAPI 账户：",
+                f"请打开下面的链接，确认这个邮箱属于你的 {settings.app_name} 账户：",
                 link,
                 "",
                 f"链接 {hours} 小时内有效。邮箱验证不影响领取密钥和调用 API。",
-                "如果你没有注册过 LuomoAPI，可以忽略这封邮件。",
+                f"如果你没有注册过 {settings.app_name}，可以忽略这封邮件。",
                 "",
                 "---",
-                f"Hi {username}, please verify your LuomoAPI account email: {link}",
+                f"Hi {username}, please verify your {settings.app_name} account email: {link}",
                 f"This link expires in {hours} hours. If you did not create this account, ignore this email.",
             ]
         )

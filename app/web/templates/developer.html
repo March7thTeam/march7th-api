@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import roundel %}
-{% block title %}控制台 · LuomoAPI{% endblock %}
+{% block title %}控制台 · {{ app_name }}{% endblock %}
 {% block content %}
 {% set active_keys = keys|selectattr('status', 'equalto', 'active')|list %}
 {% set s = usage.summary %}
@@ -40,7 +40,7 @@
 <div class="grid two section-gap">
   <section class="card">
     <div class="block-title"><h2>接入地址</h2><a class="text-link" href="/models#configuration">生成配置</a></div>
-    <div class="url-plate"><span class="tag">BASE URL</span><code id="console-base">https://api.luomo.moe/v1</code><button type="button" data-copy-target="console-base">复制</button></div>
+    <div class="url-plate"><span class="tag">BASE URL</span><code id="console-base">{{ app_base_url }}/v1</code><button type="button" data-copy-target="console-base">复制</button></div>
     <p class="muted small section-note">客户端选择 OpenAI Compatible，填入密钥和模型 ID（例如 <code>gpt-6-luna</code>）。</p>
   </section>
   <section class="card">

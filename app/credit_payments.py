@@ -204,7 +204,7 @@ async def topup(request: Request,amount_cny: str=Form(...),nonce: str=Form(...),
                 "adaptive_pricing[enabled]":"false","automatic_tax[enabled]":"false","allow_promotion_codes":"false",
                 "payment_intent_data[metadata][order_id]":order["id"],
                 "line_items[0][price_data][currency]":"cny","line_items[0][price_data][unit_amount]":str(fen),
-                "line_items[0][price_data][product_data][name]":"LuomoAPI 积分充值",
+                "line_items[0][price_data][product_data][name]":f"{settings.app_name} 积分充值",
                 "line_items[0][quantity]":"1","success_url":base+"/developer/credits?payment=returned",
                 "cancel_url":base+"/developer/credits?payment=cancelled"})
             if not re.fullmatch(r"cs_[A-Za-z0-9_]+",str(session.get("id",""))) or not valid_checkout_url(session.get("url")) or session.get("livemode") is not config["live"]:

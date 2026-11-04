@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}积分运营 · LuomoAPI{% endblock %}
+{% block title %}积分运营 · {{ app_name }}{% endblock %}
 {% block content %}
 {% set code_states = {'active':('ok','可兑换'),'redeemed':('off','已兑换'),'revoked':('off','已作废'),'expired':('off','已过期')} %}
 {% set kinds = {'admin_credit':'管理员加分','code_redemption':'兑换码到账','usage_charge':'模型调用','payment':'支付到账','credit_freeze':'积分冻结','credit_release':'解除冻结'} %}

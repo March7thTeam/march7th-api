@@ -100,8 +100,8 @@ async def redirect_api_http_to_https(request: Request, call_next):
     forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
     cf_visitor = request.headers.get("cf-visitor", "").lower()
     is_http = forwarded_proto == "http" or '"scheme":"http"' in cf_visitor
-    if host == "api.luomo.moe" and is_http:
-        target = request.url.replace(scheme="https", netloc=request.headers.get("host", "api.luomo.moe"))
+    if host in settings.https_api_hosts and is_http:
+        target = request.url.replace(scheme="https")
         return RedirectResponse(str(target), status_code=308)
     return await call_next(request)
 

@@ -25,8 +25,9 @@ from app import login_throttle  # noqa: E402
 from app.client_ip import ClientIdentity, client_identity  # noqa: E402
 from app.web import templating  # noqa: E402
 from app.auth import SESSION_COOKIE, create_session, hash_password  # noqa: E402
-from app.config import settings  # noqa: E402
+from app.config import LEGACY_API_HOSTNAME, settings  # noqa: E402
 from app.db import connect  # noqa: E402
+from app.email_verification import verification_link  # noqa: E402
 from app.main import app  # noqa: E402
 from app.utils.timefmt import now_iso  # noqa: E402
 from app.web.templating import asset, credit, line_for  # noqa: E402
@@ -70,6 +71,46 @@ class InterchangeTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, path)
             self.assertIn(asset("interchange.css"), response.text, path)
             self.assertNotIn("style.css", response.text, path)
+
+    def test_public_brand_uses_configured_base_url_on_both_hosts(self):
+        base_url = settings.app_base_url
+        for host in (base_url, f"https://{LEGACY_API_HOSTNAME}"):
+            with self.subTest(host=host):
+                docs = self.client.get(f"{host}/docs").text
+                self.assertIn(f"<title>接口文档 · {settings.app_name}</title>", docs)
+                self.assertIn(f'<link rel="canonical" href="{base_url}/docs">', docs)
+                self.assertIn(f"{base_url}/v1", docs)
+                self.assertNotIn(f"https://{LEGACY_API_HOSTNAME}/v1", docs)
+                security = self.client.get(f"{host}/.well-known/security.txt").text
+                self.assertIn(f"Canonical: {base_url}/.well-known/security.txt", security)
+        self.assertEqual(verification_link("test+token"), f"{base_url}/verify-email?token=test%2Btoken")
+
+    def test_https_upgrade_preserves_host_and_api_path(self):
+        for host in settings.https_api_hosts:
+            with self.subTest(host=host):
+                http = self.client.get(
+                    f"http://{host}/v1/models?param=1",
+                    headers={"X-Forwarded-Proto": "http"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(http.status_code, 308)
+                self.assertEqual(http.headers["location"], f"https://{host}/v1/models?param=1")
+                https = self.client.get(f"https://{host}/v1/models", follow_redirects=False)
+                self.assertEqual(https.status_code, 401)
+                self.assertNotIn("location", https.headers)
+
+    def test_cookie_authenticated_forms_accept_only_their_own_https_host(self):
+        for host in settings.https_api_hosts:
+            with self.subTest(host=host):
+                request_url = f"http://{host}/logout"
+                headers = {"Cookie": f"{SESSION_COOKIE}=fixture", "X-Forwarded-Proto": "https"}
+                own = self.client.post(request_url, headers={**headers, "Origin": f"https://{host}"}, follow_redirects=False)
+                self.assertEqual(own.status_code, 303)
+                for other_host in settings.https_api_hosts - {host}:
+                    cross = self.client.post(
+                        request_url, headers={**headers, "Origin": f"https://{other_host}"}, follow_redirects=False
+                    )
+                    self.assertEqual(cross.status_code, 403)
 
     def test_pricing_is_public_and_lists_official_prices(self):
         response = self.client.get("/pricing")

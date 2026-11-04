@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import sdk_screen %}
-{% block title %}接口文档 · LuomoAPI{% endblock %}
-{% block description %}LuomoAPI 接口文档：快速开始、认证、OpenAI 兼容 AI 接口、积分计费、错误码与业务接口目录。{% endblock %}
+{% block title %}接口文档 · {{ app_name }}{% endblock %}
+{% block description %}{{ app_name }} 接口文档：快速开始、认证、OpenAI 兼容 AI 接口、积分计费、错误码与业务接口目录。{% endblock %}
 {% block public %}
 <div class="wrap docs">
   <nav class="docs-nav" aria-label="文档目录">
@@ -19,7 +19,7 @@
   <article class="docs-body">
     <p class="eyebrow">Reference · 接口文档</p>
     <h1>接入指南</h1>
-    <p class="lead docs-lead">AI 模型走 OpenAI 兼容地址 <code>https://api.luomo.moe/v1</code>；洛墨站其他业务服务统一经过 <code>/api/public/v1/{route}</code>。</p>
+    <p class="lead docs-lead">AI 模型走 OpenAI 兼容地址 <code>{{ app_base_url }}/v1</code>；洛墨站其他业务服务统一经过 <code>/api/public/v1/{route}</code>。</p>
 
     <section id="quickstart">
       <h2>快速开始</h2>
@@ -27,7 +27,7 @@
         <li><a href="/register">注册账户</a>，注册后立即启用，无需人工审核。</li>
         <li>在 <a href="/developer/keys">API 密钥</a> 页面自助签发密钥，完整密钥只显示一次，请立即保存。</li>
         <li>在 <a href="/developer/credits">积分</a> 页面兑换积分（兑换码或管理员加分）。</li>
-        <li>把客户端的 base_url 设为 <code>https://api.luomo.moe/v1</code>，发起第一次请求：</li>
+        <li>把客户端的 base_url 设为 <code>{{ app_base_url }}/v1</code>，发起第一次请求：</li>
       </ol>
       {{ sdk_screen(id='docs-sdk') }}
     </section>
@@ -107,7 +107,7 @@
           <div class="screen">
             <div class="screen-bar"><span class="title">REQUEST</span><button class="copy" type="button" data-copy-target="request-{{ route.id }}" aria-label="复制 {{ route.name }} 请求示例">复制</button></div>
 <pre id="request-{{ route.id }}">curl --request {{ route.target_method }} \
-  'https://api.luomo.moe/api/public/v1/{{ route.public_path }}'{% if not route.allow_anonymous %} \
+  '{{ app_base_url }}/api/public/v1/{{ route.public_path }}'{% if not route.allow_anonymous %} \
   --header "Authorization: Bearer $LUOMO_API_KEY"{% endif %}{% if route.target_method in ['POST', 'PUT', 'PATCH'] %} \
   --header 'Content-Type: application/json' \
   --data '{}'{% endif %}</pre>

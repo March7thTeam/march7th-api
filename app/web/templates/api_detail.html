@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ api.name }} · LuomoAPI{% endblock %}
+{% block title %}{{ api.name }} · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><p class="eyebrow">Depot · 上游详情</p><h1>{{ api.name }}</h1><p class="lead"><code>{{ api.base_url }}</code></p></div><div class="actions"><a class="btn" href="/tester?api_id={{ api.id }}">在测试台打开</a><a class="btn ghost" href="/apis">返回列表</a></div></div>
 <div class="grid two">

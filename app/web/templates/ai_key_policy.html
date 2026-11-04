@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}密钥策略 · LuomoAPI{% endblock %}
+{% block title %}密钥策略 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><p class="eyebrow">Ticket rules · 密钥策略</p><h1>{{ key.name }}</h1><p class="lead"><code>{{ key.key_prefix }}</code> · <span class="badge {{ key.status|tone }}">{{ key.status|label }}</span> · 只修改这一把密钥，保存后立即生效。</p></div><div class="actions"><a class="btn" href="/admin/api-keys">返回密钥列表</a></div></div>
 {% if saved %}<div class="notice success" role="status">策略已保存。</div>{% endif %}

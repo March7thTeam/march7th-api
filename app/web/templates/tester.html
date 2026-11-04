@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}接口测试 · LuomoAPI{% endblock %}
+{% block title %}接口测试 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><p class="eyebrow">Test track · 接口测试</p><h1>接口测试</h1><p class="lead">向已登记的上游 API 发送请求，查看响应与脱敏后的记录。AI 生成接口不能从这里绕过计费网关。</p></div><div class="actions"><a class="btn" href="/logs">测试日志</a></div></div>
 {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}

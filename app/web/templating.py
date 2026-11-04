@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from app.config import settings
 from app.model_lines import line_for
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -78,5 +79,11 @@ def credit(value) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-templates.env.globals.update(asset=asset, line_for=line_for)
+templates.env.globals.update(
+    asset=asset,
+    line_for=line_for,
+    app_name=settings.app_name,
+    app_base_url=settings.app_base_url,
+    app_authority=settings.app_authority,
+)
 templates.env.filters.update(label=label, tone=tone, utc=utc, credit=credit)
