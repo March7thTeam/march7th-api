@@ -143,8 +143,12 @@
       const option = model.selectedOptions[0]; if (!option) return;
       const read = field => Math.max(0, Number(field.value) || 0);
       const inTokens = read(input); const cachedTokens = Math.min(read(cached), inTokens); const outTokens = read(output);
-      const rate = name => Number(option.dataset[name]);
-      const cachedRate = option.dataset.cached ? rate('cached') : rate('input');
+      // Billing switches the whole request to the long-context tier once input exceeds the threshold.
+      const threshold = Number(option.dataset.longThreshold) || 0;
+      const tier = threshold && inTokens > threshold ? 'long' : '';
+      const key = name => tier ? tier + name[0].toUpperCase() + name.slice(1) : name;
+      const rate = name => Number(option.dataset[key(name)]);
+      const cachedRate = option.dataset[key('cached')] ? rate('cached') : rate('input');
       const credits = ((inTokens - cachedTokens) * rate('input') + cachedTokens * cachedRate + outTokens * rate('output')) / 1e6;
       $('#est-credits').textContent = format(credits);
       $('#est-usd').textContent = format(credits / 720, '$');

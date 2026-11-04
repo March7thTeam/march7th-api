@@ -414,7 +414,7 @@ pre.plain { margin: 0; padding: 14px 16px; background: var(--surface-2); border:
   background: var(--sign); color: var(--sign-ink); border-radius: var(--radius); overflow: hidden; border: 2px solid var(--rule-strong);
 }
 .url-plate .tag { display: grid; place-items: center; padding: 0 12px; font: 700 11px/1 var(--font-mono); letter-spacing: .1em; background: var(--signal); color: var(--signal-ink); }
-.url-plate code { flex: 1; display: flex; align-items: center; padding: 12px 16px; font-size: 16px; font-weight: 600; background: none; color: var(--sign-ink); white-space: nowrap; overflow-x: auto; }
+.url-plate code { flex: 1; display: flex; align-items: center; padding: 12px 16px; font-size: 16px; font-weight: 600; background: none; color: var(--sign-ink); white-space: nowrap; overflow-x: auto; min-width: 0; }
 .url-plate button { padding: 0 16px; font: 700 13px/1 var(--font-sans); color: var(--sign-ink); background: var(--sign-2); border: 0; border-left: 1px solid rgba(255, 255, 255, .12); cursor: pointer; }
 .url-plate button:hover { background: #2c3658; }
 
@@ -713,7 +713,7 @@ details.raw summary { cursor: pointer; font-weight: 600; font-size: 13px; color:
   .station-sign .bar a small { display: none; }
 }
 @media (max-width: 720px) {
-  .grid.two, .grid.three, .grid.four, .form.two { grid-template-columns: 1fr; }
+  .grid.two, .grid.three, .grid.four, .form.two { grid-template-columns: minmax(0, 1fr); }
   .line-diagram { grid-template-columns: 1fr; gap: 22px; }
   .line-diagram::before { top: 14px; bottom: 14px; left: 11px; right: auto; width: 6px; height: auto; }
   .line-diagram li { padding: 0 0 0 46px; }

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.api_client import validate_url
+from app.client_ip import client_address
 from app.db import connect
 from app.keyring import verify_api_key
 from app.utils.redact import preview, redact_obj, redact_url
@@ -85,7 +86,7 @@ def lookup_key(raw_key: str, route):
 
 def log_usage(route, key_row, method: str, target_url: str, status_code: int | None, elapsed_ms: int | None,
               success: bool, request: Request, error: str | None, request_preview: str, response_preview: str) -> None:
-    client = request.client.host if request.client else ""
+    client = client_address(request) or ""
     ip_hash = hashlib.sha256(client.encode("utf-8")).hexdigest() if client else ""
     user_agent = (request.headers.get("user-agent") or "")[:240]
     with connect() as conn:

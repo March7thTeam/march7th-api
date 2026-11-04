@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import mimetypes
 import re
 import secrets
 from collections import OrderedDict
@@ -52,9 +53,13 @@ from app.ai_policies import validate_policy
 from app.credit_console import router as credit_console_router
 from app.self_service_keys import init_self_key_schema, issue_self_key, self_key_nonce
 from app.credit_payments import router as credit_payment_router, initialize_payment_schema, payment_context
-from app.client_ip import client_address, client_identity
+from app.client_ip import client_address, client_identity, forwarded_https
 from app.login_throttle import cancel_login_attempt, init_login_throttle_schema, release_login_attempt, reserve_login_attempt
 from app.web.templating import STATIC_DIR, fingerprint, templates
+
+
+# python:3.12-slim has no /etc/mime.types entry for woff2, so the font was served as text/plain.
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 class CachedStaticFiles(StaticFiles):
@@ -103,6 +108,15 @@ async def redirect_api_http_to_https(request: Request, call_next):
     if host in settings.https_api_hosts and is_http:
         target = request.url.replace(scheme="https")
         return RedirectResponse(str(target), status_code=308)
+    return await call_next(request)
+
+
+# Registered last, so it runs first: everything below (trailing-slash redirects, url_for, CSRF origin checks)
+# sees the scheme the visitor actually used instead of the plain-HTTP hop from cloudflared.
+@app.middleware("http")
+async def trust_forwarded_https(request: Request, call_next):
+    if request.scope.get("scheme") == "http" and forwarded_https(request):
+        request.scope["scheme"] = "https"
     return await call_next(request)
 
 

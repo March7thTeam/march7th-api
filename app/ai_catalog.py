@@ -1,5 +1,6 @@
 """Public capability guidance and a bounded, non-generating upstream probe."""
 import asyncio
+from contextlib import closing
 import os
 import time
 from datetime import datetime, timezone
@@ -33,17 +34,12 @@ _expires = 0.0
 _lock = asyncio.Lock()
 
 
-def _database_snapshot():
-    with connect() as conn:
-        counts = {name: conn.execute(sql).fetchone()[0] for name, sql in {
-            "routes_count": "SELECT COUNT(*) FROM public_gateway_routes",
-            "enabled_routes_count": "SELECT COUNT(*) FROM public_gateway_routes WHERE enabled=1",
-            "public_docs_routes_count": "SELECT COUNT(*) FROM public_gateway_routes WHERE public_docs=1",
-            "apis_count": "SELECT COUNT(*) FROM apis",
-            "enabled_apis_count": "SELECT COUNT(*) FROM apis WHERE enabled=1",
-            "active_keys_count": "SELECT COUNT(*) FROM api_keys WHERE status='active'",
-        }.items()}
-        return conn.execute("SELECT 1").fetchone()[0] == 1, counts
+def _database_snapshot() -> bool:
+    # Read real tables so a missing or corrupt schema counts as degraded; the numbers stay private.
+    with closing(connect()) as conn:
+        conn.execute("SELECT COUNT(*) FROM public_gateway_routes").fetchone()
+        conn.execute("SELECT COUNT(*) FROM api_keys").fetchone()
+        return conn.execute("SELECT 1").fetchone()[0] == 1
 
 
 def public_verification(data, model_id):
@@ -74,13 +70,10 @@ async def snapshot():
         if _cache is not None and time.monotonic() < _expires:
             return _cache
         checked_at = datetime.now(timezone.utc).isoformat()
-        db_ok = False
-        counts = {}
         try:
-            db_ok, counts = await run_in_threadpool(_database_snapshot)
+            db_ok = await run_in_threadpool(_database_snapshot)
         except Exception:
             db_ok = False
-            counts = {}
         models, upstream_ok, latency = [], False, None
         reason = "未配置上游凭据"
         secret = os.getenv("CODEXPROXY_API_KEY", "")
@@ -119,6 +112,6 @@ async def snapshot():
                             "verification": checked, "note": verification_note(checked, text_candidate)})
         _cache = {"service": "LuomoAPI Hub", "version": "2026.10-interchange-t001", "status": "operational" if db_ok and upstream_ok else "degraded", "updated_at": checked_at, "cache_seconds": 30,
                   "components": [{"name": "网关应用", "status": "operational", "detail": "当前 HTTP 请求已到达应用"}, {"name": "数据库", "status": "operational" if db_ok else "degraded", "detail": "只读查询成功" if db_ok else "查询失败"}, {"name": "AI 上游目录", "status": "operational" if upstream_ok else "degraded", "detail": reason, "latency_ms": latency}],
-                  "models": entries, "model_count": len(models), "default_model": default_model(entries), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。", **counts}
+                  "models": entries, "model_count": len(models), "default_model": default_model(entries), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。"}
         _expires = time.monotonic() + 30
         return _cache

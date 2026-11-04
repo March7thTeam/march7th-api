@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from contextlib import closing
 from typing import Any
 
@@ -75,6 +76,8 @@ def security_text() -> str:
             "Contact: mailto:security@luomo.moe",
             "Contact: mailto:luomo0712@qq.com",
             "Preferred-Languages: zh, en",
+            # RFC 9116 requires Expires; roll it forward so the file never goes stale.
+            f"Expires: {(datetime.now(timezone.utc) + timedelta(days=180)).strftime('%Y-%m-%dT00:00:00Z')}",
             f"Canonical: {settings.app_base_url}/.well-known/security.txt",
             f"Policy: {settings.app_base_url}/security",
             "",

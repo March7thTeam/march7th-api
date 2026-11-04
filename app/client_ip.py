@@ -58,3 +58,17 @@ def client_identity(request: Request) -> ClientIdentity:
 
 def client_address(request: Request) -> str | None:
     return client_identity(request).address
+
+
+def forwarded_https(request: Request) -> bool:
+    """True when an allow-listed proxy reports that the visitor reached Cloudflare over HTTPS.
+
+    uvicorn only trusts X-Forwarded-Proto from 127.0.0.1, but production traffic arrives from the Docker bridge
+    gateway, so without this the app believes every request is plain HTTP (e.g. /v1 -> http://.../v1/).
+    """
+    peer_ip = _ip(request.client.host if request.client else None)
+    if peer_ip is None or peer_ip not in TRUSTED_PROXY_PEERS:
+        return False
+    proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    visitor = request.headers.get("cf-visitor", "").replace(" ", "").lower()
+    return proto == "https" or '"scheme":"https"' in visitor

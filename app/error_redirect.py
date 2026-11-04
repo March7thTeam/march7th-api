@@ -8,6 +8,8 @@ from urllib.parse import quote
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from app.client_ip import client_address
+
 
 def _is_api_request(request: Request) -> bool:
     path = request.url.path
@@ -49,7 +51,7 @@ async def error_redirect_middleware(request: Request, call_next):
         if response.status_code in redirect_codes:
             source = request.headers.get("host", "-")
             path = quote(request.url.path, safe="/")
-            ip = request.client.host if request.client else "-"
+            ip = client_address(request) or "-"
             ray = request.headers.get("cf-ray", "-")
             url = f"https://error.luomo.moe/{response.status_code}?status={response.status_code}&source={quote(source, safe='')}&path={path}&ip={quote(ip, safe='')}&ray={quote(ray, safe='')}"
             return RedirectResponse(url=url, status_code=302)
@@ -59,6 +61,6 @@ async def error_redirect_middleware(request: Request, call_next):
             return _api_exception(request)
         source = quote(request.headers.get("host", "-"), safe="")
         path = quote(request.url.path, safe="/")
-        ip = quote(request.client.host if request.client else "-", safe="")
+        ip = quote(client_address(request) or "-", safe="")
         url = f"https://error.luomo.moe/500?status=500&source={source}&path={path}&ip={ip}&ray=app-exception"
         return RedirectResponse(url=url, status_code=302)

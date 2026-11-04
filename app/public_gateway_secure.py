@@ -37,6 +37,7 @@ from app.ai_usage import (
     reserve_usage,
 )
 from app.upstream_security import PinnedTarget, resolve_and_pin_target
+from app.client_ip import client_address
 from app.http_clients import public_upstream_client
 
 
@@ -500,7 +501,7 @@ def _finalize_or_insert(
                     status_code=status_code,
                     response_time_ms=response_time_ms,
                     success=success,
-                    client_ip=request.client.host if request.client else None,
+                    client_ip=client_address(request),
                     user_agent=request.headers.get("user-agent"),
                     error_summary=error_summary,
                     request_preview="",
@@ -611,7 +612,7 @@ async def public_gateway(route_path: str, request: Request):
                 request_id,
                 request.method,
                 route_path,
-                request.client.host if request.client else None,
+                client_address(request),
                 request.headers.get("user-agent"),
             )
             if rejection:
