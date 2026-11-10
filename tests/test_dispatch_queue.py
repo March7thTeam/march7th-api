@@ -1,5 +1,4 @@
 """Explicit dispatch queue contracts through routes, locks and real SQLite."""
-import ast
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -7,7 +6,6 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
-import subprocess
 import threading
 import time
 import unittest
@@ -15,6 +13,7 @@ from unittest.mock import patch
 
 import httpx
 
+import legacy_main_schema
 import test_backend_v2 as fixture
 import test_credit_gateway as gateway_fixture
 import test_repair_r3 as previous
@@ -1330,19 +1329,12 @@ class DirectLedgerQueueTests(unittest.TestCase):
 
 class QueueMigrationTests(fixture.BackendCase):
     def test_main_held_holds_backfill_watch_once_without_releasing_money(self):
-        root = Path(__file__).resolve().parents[1]
-
-        def main_constant(path, name):
-            source = subprocess.check_output(['git', 'show', f'main:{path}'], cwd=root, text=True)
-            return next(ast.literal_eval(node.value) for node in ast.parse(source).body
-                        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets))
-
         path = Path(self.directory.name) / 'main-held.sqlite'
         created = datetime.now(timezone.utc)
         created_at = recovery.timestamp(created)
         with closing(db.connect_database(path)) as conn, conn:
-            conn.executescript(main_constant('app/db.py', 'SCHEMA'))
-            for statement in main_constant('app/credit_ledger.py', '_SCHEMA'):
+            conn.executescript(legacy_main_schema.DB_SCHEMA)
+            for statement in legacy_main_schema.LEDGER_SCHEMA:
                 conn.execute(statement)
             # main adds these usage columns in initialize_credit_schema.
             conn.execute('ALTER TABLE api_usage_logs ADD COLUMN dispatch_state TEXT')
@@ -1402,11 +1394,7 @@ class QueueMigrationTests(fixture.BackendCase):
                 self.assertEqual(conn.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_main_database_migrates_twice_without_backfill_or_releasing_history(self):
-        root = Path(__file__).resolve().parents[1]
-        source = subprocess.check_output(['git', 'show', 'main:app/db.py'], cwd=root, text=True)
-        tree = ast.parse(source)
-        schema = next(ast.literal_eval(node.value) for node in tree.body
-                      if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'SCHEMA' for t in node.targets))
+        schema = legacy_main_schema.DB_SCHEMA
         path = Path(self.directory.name) / 'main.sqlite'
         old = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         with closing(db.connect_database(path)) as conn, conn:
