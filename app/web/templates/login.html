@@ -11,19 +11,20 @@
         <div class="route"><span>你的应用</span><span class="arrow"></span><span>模型线路</span></div>
         <div class="meta"><span>站点<b>换乘枢纽</b></span><span>协议<b>OpenAI</b></span><span>票种<b>积分</b></span></div>
       </div>
-      <div class="side">LUOMO API</div>
+      <div class="side">MARCH7TH</div>
     </div>
   </section>
   <section class="gate-card">
     <h2>登录</h2>
     <p class="desc">使用注册时的用户名和密码。</p>
+    {% if message %}<div class="notice success" role="status">{{ message }}</div>{% endif %}
     {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
     <form method="post" action="/login" class="form">
       <label class="field" for="username">用户名<input id="username" name="username" type="text" autocomplete="username" value="{{ username|default('') }}" required autofocus></label>
-      <label class="field" for="password">密码<span class="password-field"><input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" aria-controls="password" aria-pressed="false" aria-label="切换密码可见性">显示</button></span></label>
-      <button class="btn primary block" type="submit">登录 <span class="arrow" aria-hidden="true">→</span></button>
+      <div class="field"><span class="field-row"><label for="password">密码</label><a href="/forgot-password">忘记密码？</a></span><span class="password-field"><input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" aria-controls="password" aria-pressed="false" aria-label="切换密码可见性">显示</button></span></div>
+      <button class="btn primary block" type="submit" data-busy="正在登录…">登录 <span class="arrow" aria-hidden="true">→</span></button>
     </form>
-    <div class="foot">还没有账户？<a href="/register">注册并领取密钥</a></div>
+    <div class="foot"><span>还没有账户？<a href="/register">免费注册</a></span></div>
   </section>
 </div>
 {% endblock %}

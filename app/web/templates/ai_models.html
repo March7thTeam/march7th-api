@@ -26,13 +26,21 @@
 </div>
 
 <div class="block-title section-gap"><h2>线路一览</h2><a class="text-link" href="/status">服务状态</a></div>
+{% if catalog.models %}
+<div class="toolbar" role="group" aria-label="筛选模型">
+  <button class="filter-chip" type="button" data-model-filter="all" aria-pressed="true">全部 {{ catalog.models|length }}</button>
+  <button class="filter-chip" type="button" data-model-filter="callable" aria-pressed="false">可调用 {{ catalog.models|selectattr('text_candidate')|list|length }}</button>
+  <button class="filter-chip" type="button" data-model-filter="vision" aria-pressed="false">支持图像 {{ catalog.models|selectattr('vision')|selectattr('text_candidate')|list|length }}</button>
+  <span id="model-count" class="muted small" role="status"></span>
+</div>
+{% endif %}
 <p class="muted">用途参考模型官方说明；“已实测”只覆盖标注的协议与日期，不保证全部参数、工具或视觉能力。目录可见也不代表你的密钥已获授权。</p>
 <div class="line-cards">
   {% for model in catalog.models %}
   {% set line = line_for(model.id) %}
-  <article class="line-card {{ '' if model.text_candidate else 'muted-card' }}" data-line="{{ line.family }}">
+  <article class="line-card {{ '' if model.text_candidate else 'muted-card' }}" data-line="{{ line.family }}" data-callable="{{ 1 if model.text_candidate else 0 }}" data-vision="{{ 1 if model.vision and model.text_candidate else 0 }}">
     <div class="top">{{ roundel(model.id, 'lg') }}<div><h3>{{ model.name }}</h3><div class="id">{{ model.id }}</div></div></div>
-    <div class="chips"><span class="chip">{{ model.category }}</span><span class="badge {{ model.state.tone }}">{{ model.state.label }}</span></div>
+    <div class="chips"><span class="chip">{{ model.category }}</span>{% if model.vision and model.text_candidate %}<span class="chip vision" title="{{ '网关已开放图像输入' if image_input_enabled() else '模型支持图像输入；本站网关尚未开放' }}">图像输入{{ '' if image_input_enabled() else '（未开放）' }}</span>{% endif %}<span class="badge {{ model.state.tone }}">{{ model.state.label }}</span></div>
     <p>{{ model.use }}</p>
     <div class="verify">{% if model.verification %}<strong>已实测</strong> {{ model.verification.protocols|join(' · ') }}<br><span class="mono">{{ model.verification.checked_at[:10] }}</span>{% else %}{{ model.note }}{% endif %}</div>
     {% if model.text_candidate %}<div class="foot"><button class="btn sm" type="button" data-select-model="{{ model.id }}">用它生成配置 <span class="arrow" aria-hidden="true">↓</span></button></div>{% endif %}
@@ -65,7 +73,8 @@
       <tr><td><code>GET /v1/models</code></td><td>读取当前密钥允许的模型</td><td><code>models:read</code></td><td>不消耗积分</td></tr>
       <tr><td><code>POST /v1/chat/completions</code></td><td>常见客户端聊天，支持 SSE 流式</td><td><code>chat:completions</code></td><td>messages 格式</td></tr>
       <tr><td><code>POST /v1/responses</code></td><td>Responses 协议，支持 SSE 流式</td><td><code>responses:create</code></td><td>input 格式；不支持远端会话检索</td></tr>
-      <tr><td>图像 / 音频 / embeddings / 文件</td><td colspan="3" class="muted">暂未开放；目录中的图像模型名称不代表接口可用。</td></tr>
+      <tr><td>图像输入</td><td colspan="3" class="muted">{% if image_input_enabled() %}已开放：在 messages / input 中附带 <code>image_url</code> 或 <code>input_image</code>（https 或 base64，每次最多 16 张），仅限标注“图像输入”的模型。{% else %}暂未开放；目录中的“图像输入”只表示模型本身支持。{% endif %}</td></tr>
+      <tr><td>图像生成 / 音频 / embeddings / 文件</td><td colspan="3" class="muted">暂未开放；目录中的图像模型名称不代表接口可用。</td></tr>
     </tbody>
   </table></div></div>
   <p class="muted small section-note">新密钥同时受协议权限和模型白名单约束；旧版已授予的 CodexProxy 权限保持兼容。每分钟请求数、日/月配额和 UTC 有效期均由网关检查，失败和取消的请求也计入次数。</p>

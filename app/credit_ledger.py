@@ -1,16 +1,22 @@
 """Integer credit accounting. Mutations join the caller's IMMEDIATE transaction.
 
-No function in this module begins, commits, or rolls back a transaction. Gateway
-callers must reserve usage and credits together, close the connection before
-network I/O, then complete usage and settle credits together on a new connection.
+Credit mutations join the caller's transaction. The periodic recovery entry
+point owns a separate short transaction before gateway admission. Gateway callers
+close their connection before network I/O and complete usage on a new connection.
 """
 from __future__ import annotations
 
+from functools import partial
+from app.utils.timefmt import now_iso as _now_iso
+
 import hashlib
 import json
+import logging
 import re
 import secrets
 import sqlite3
+import threading
+from time import monotonic
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any
@@ -21,6 +27,12 @@ CREDITS_PER_USD = 720
 MAX_UNITS = 9_223_372_036_854_775_807
 REDEEM_LIMIT = 5
 REDEEM_WINDOW_SECONDS = 900
+STALE_HOLD_MINUTES = 15
+RECOVERY_INTERVAL_SECONDS = 60
+RECOVERY_BATCH_SIZE = 100
+RECOVERY_RETRY_SECONDS = 60
+_recovery_lock = threading.Lock()
+_last_recovery: dict[str, float] = {}
 
 
 class CreditError(Exception):
@@ -30,9 +42,7 @@ class CreditError(Exception):
         self.status_code = status
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
+now_iso = partial(_now_iso, timespec="microseconds")
 
 def amount_to_units(value: str | Decimal | int, currency: str = "credits") -> int:
     """Reject floats, non-finite values, rounding and SQLite integer overflow."""
@@ -175,20 +185,26 @@ def initialize_credit_schema(conn: sqlite3.Connection) -> None:
     """Additive migration; old usage stays unbilled and old wallets start at zero."""
     for statement in _SCHEMA:
         conn.execute(statement)
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(api_usage_logs)")}
+    existing = {row[1] for row in conn.execute("PRAGMA table_xinfo(api_usage_logs)")}
     additions = {
         "credit_status": "TEXT NOT NULL DEFAULT 'legacy_unbilled'",
         "credit_reserved_units": "INTEGER NOT NULL DEFAULT 0 CHECK(credit_reserved_units>=0)",
         "credit_charged_units": "INTEGER NOT NULL DEFAULT 0 CHECK(credit_charged_units>=0)",
         "credit_pricing_snapshot": "TEXT", "credit_usage_json": "TEXT", "credit_reason": "TEXT",
+        "dispatch_state": "TEXT",
     }
     for name, declaration in additions.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE api_usage_logs ADD COLUMN {name} {declaration}")
-    hold_columns={row[1] for row in conn.execute("PRAGMA table_info(credit_holds)")}
-    for name,declaration in {"dispatch_state":"TEXT NOT NULL DEFAULT 'reserved' CHECK(dispatch_state IN ('reserved','dispatched'))","dispatched_at":"TEXT"}.items():
+    hold_columns={row[1] for row in conn.execute("PRAGMA table_xinfo(credit_holds)")}
+    for name,declaration in {
+        "dispatch_state":"TEXT NOT NULL DEFAULT 'reserved' CHECK(dispatch_state IN ('reserved','dispatched'))",
+        "dispatched_at":"TEXT",
+    }.items():
         if name not in hold_columns:
             conn.execute(f"ALTER TABLE credit_holds ADD COLUMN {name} {declaration}")
+    from app.dispatch_recovery import initialize_dispatch_schema
+    initialize_dispatch_schema(conn)
     conn.execute("INSERT OR IGNORE INTO credit_wallets(user_id,balance_units,reserved_units,updated_at) SELECT id,0,0,? FROM users", (now_iso(),))
 
 
@@ -242,13 +258,59 @@ def _usage_state(conn, usage_id, status, *, reserved, charged=0, snapshot=None, 
                  (status,reserved,charged,snapshot,usage_json,reason,usage_id))
 
 
-def recover_stale_holds(conn: sqlite3.Connection) -> int:
+def _claim_stale_recovery(conn: sqlite3.Connection, *, force: bool) -> bool:
+    database = next(row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main")
+    with _recovery_lock:
+        now = monotonic()
+        previous = _last_recovery.get(database)
+        if not force and previous is not None and now - previous < RECOVERY_INTERVAL_SECONDS:
+            return False
+        # Failed attempts are also bounded when the database remains unavailable.
+        _last_recovery[database] = now
+        return True
+
+
+def recover_stale_usage(conn: sqlite3.Connection, *, force: bool = False) -> int:
+    """Run bounded recovery independently of the subsequent admission result."""
+    try:
+        if not _claim_stale_recovery(conn, force=force):
+            return 0
+        conn.execute("BEGIN IMMEDIATE")
+        recovered = _recover_stale_holds(conn)
+        conn.commit()
+        return recovered
+    except Exception:
+        conn.rollback()
+        logging.getLogger("luomoapi.credits").exception("stale_usage_recovery_failed")
+        return 0
+
+
+def recover_stale_holds(conn: sqlite3.Connection, *, force: bool = False) -> int:
+    """Join wallet callers' IMMEDIATE transactions using the same recovery gate."""
     _tx(conn)
-    stale = conn.execute("SELECT usage_id,amount_units FROM credit_holds WHERE status='held' AND julianday(created_at)<=julianday(?)", ((datetime.now(timezone.utc)-timedelta(minutes=15)).isoformat(),)).fetchall()
-    for usage_id, amount in stale:
-        conn.execute("UPDATE credit_holds SET status='reconciliation_required',reason='stale_hold',updated_at=? WHERE usage_id=? AND status='held'", (now_iso(),usage_id))
-        _usage_state(conn,usage_id,"reconciliation_required",reserved=amount,reason="stale_hold")
-    return len(stale)
+    if not _claim_stale_recovery(conn, force=force):
+        return 0
+    return _recover_stale_holds(conn)
+
+
+def _complete_stale_unsent(conn: sqlite3.Connection, usage_id: int, cutoff: str) -> None:
+    from app.dispatch_recovery import is_stale
+    row = conn.execute("SELECT * FROM api_usage_logs WHERE id=?", (usage_id,)).fetchone()
+    if not row or not is_stale(row["started_at"] if row["started_at"] is not None else row["created_at"], cutoff):
+        raise CreditError("reservation_conflict", "未发送日志尚未过期。", 409)
+    changed = conn.execute("""UPDATE api_usage_logs SET dispatch_state='not_dispatched',
+        completed_at=?, status_code=500, success=0,
+        outcome='gateway_error_not_dispatched', error_summary='Recovered stale unsent request.'
+        WHERE id=? AND dispatch_state='reserved' AND completed_at IS NULL""",
+        (now_iso(), usage_id)).rowcount
+    if changed != 1:
+        raise CreditError("reservation_conflict", "未发送日志状态已变化。", 409)
+    conn.execute("DELETE FROM usage_dispatch_pending WHERE usage_id=?", (usage_id,))
+
+
+def _recover_stale_holds(conn: sqlite3.Connection) -> int:
+    from app.dispatch_recovery import recover_dispatch_queue
+    return recover_dispatch_queue(conn, datetime.now(timezone.utc))
 
 
 def pending_overrun_units(conn: sqlite3.Connection, user_id: int, *, exclude_usage_id: int | None = None) -> int:
@@ -268,10 +330,9 @@ def reserve_credit(conn: sqlite3.Connection, usage_id: int, user_id: int, amount
         if (previous["user_id"],previous["amount_units"],previous["pricing_snapshot"]) != (user_id,amount_units,pricing_snapshot):
             raise CreditError("reservation_conflict", "此请求已有不同的积分预留。", 409)
         return
-    usage = _one(conn,"SELECT user_id FROM api_usage_logs WHERE id=?",(usage_id,))
+    usage = _one(conn,"SELECT user_id,request_id,created_at,started_at,dispatch_state FROM api_usage_logs WHERE id=?",(usage_id,))
     if not usage or usage["user_id"] != user_id:
         raise CreditError("usage_not_found", "调用记录不存在或不属于该用户。", 409)
-    recover_stale_holds(conn)
     if _one(conn,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='credit_payment_reviews'") and _one(conn,
             "SELECT 1 FROM credit_payment_reviews r JOIN credit_payment_orders o ON o.id=r.order_id WHERE o.user_id=? AND r.state='open' LIMIT 1",(user_id,)):
         raise CreditError("payment_reconciliation_required", "账户存在支付待核记录，请联系管理员核实后继续生成。", 409)
@@ -287,6 +348,12 @@ def reserve_credit(conn: sqlite3.Connection, usage_id: int, user_id: int, amount
     conn.execute("""INSERT INTO credit_ledger(user_id,reference,kind,delta_units,delta_reserved_units,balance_after_units,reserved_after_units,usage_id,note,created_at)
                     VALUES (?,?,?,0,?,?,?,?,?,?)""",(user_id,f"usage:{usage_id}:freeze","credit_freeze",amount_units,wallet["balance_units"],wallet["reserved_units"],usage_id,"生成请求积分预留",now))
     _usage_state(conn,usage_id,"held",reserved=amount_units,snapshot=pricing_snapshot,reason="reserved")
+    from app.dispatch_recovery import enqueue_usage
+    # Use the same log identity/time as reserve_usage; a second enqueue must
+    # preserve the first row, including any persisted retry evidence.
+    enqueue_usage(conn, usage_id, usage["request_id"],
+                  usage["started_at"] if usage["started_at"] is not None else usage["created_at"],
+                  review_only=usage["dispatch_state"] != "reserved")
 
 
 def mark_credit_dispatched(conn: sqlite3.Connection, usage_id: int) -> None:
@@ -295,9 +362,13 @@ def mark_credit_dispatched(conn: sqlite3.Connection, usage_id: int) -> None:
     hold=_one(conn,"SELECT * FROM credit_holds WHERE usage_id=?",(usage_id,))
     if not hold or hold["status"] != "held":
         raise CreditError("dispatch_conflict","积分预留已结束或需要人工核账，不能继续发送。",409)
-    if hold["dispatch_state"] == "dispatched":
-        return
-    conn.execute("UPDATE credit_holds SET dispatch_state='dispatched',dispatched_at=?,updated_at=? WHERE usage_id=? AND status='held' AND dispatch_state='reserved'",(now_iso(),now_iso(),usage_id))
+    if hold["dispatch_state"] != "dispatched":
+        conn.execute("UPDATE credit_holds SET dispatch_state='dispatched',dispatched_at=?,updated_at=? WHERE usage_id=? AND status='held' AND dispatch_state='reserved'",(now_iso(),now_iso(),usage_id))
+    # mark_usage_dispatched owns the enclosing send transaction. Keep the
+    # lower-level marker consistent for direct ledger callers as well.
+    from app.dispatch_recovery import enqueue_hold_watch
+    conn.execute("DELETE FROM usage_dispatch_pending WHERE usage_id=?", (usage_id,))
+    enqueue_hold_watch(conn, usage_id, hold["created_at"])
 
 
 def _result(hold: dict) -> dict:
@@ -316,15 +387,46 @@ def _can_cover_charge(conn, hold, actual_units, wallet):
         conn,hold["user_id"],exclude_usage_id=hold["usage_id"])
 
 
-def _finalize(conn,hold,actual_units,reason,usage_json,actor_id=None):
+def _reserved_hold(conn: sqlite3.Connection, usage_id: int, stale_before: str | None) -> dict | None:
+    hold = _one(conn, """SELECT h.* FROM credit_holds h JOIN api_usage_logs a ON a.id=h.usage_id
+        WHERE h.usage_id=? AND h.status IN ('held','reconciliation_required')
+        AND h.dispatch_state='reserved' AND a.dispatch_state='reserved' AND a.completed_at IS NULL""",
+        (usage_id,))
+    if hold and stale_before is not None:
+        from app.dispatch_recovery import is_stale
+        row = conn.execute("SELECT started_at, created_at FROM api_usage_logs WHERE id=?", (usage_id,)).fetchone()
+        if not is_stale(hold["created_at"], stale_before) or not is_stale(row["started_at"] if row["started_at"] is not None else row["created_at"], stale_before):
+            return None
+    return hold
+
+
+def release_reserved_credit(conn: sqlite3.Connection, usage_id: int, *, reason: str,
+                            stale_before: str | None = None) -> bool:
+    """Release only a mutually reserved, unfinished request, including stale pending holds."""
+    _tx(conn)
+    hold = _reserved_hold(conn, usage_id, stale_before)
+    if not hold:
+        return False
+    owner = _one(conn, "SELECT user_id FROM api_usage_logs WHERE id=?", (usage_id,))
+    if owner["user_id"] != hold["user_id"] or hold["actual_units"] is not None or hold["usage_json"] is not None:
+        raise CreditError("reservation_conflict", "未发送预留包含不一致的归属或计费记录。", 409)
+    _finalize(conn, hold, 0, reason, None, reserved_only=True)
+    return True
+
+
+def _finalize(conn,hold,actual_units,reason,usage_json,actor_id=None,*,reserved_only=False):
     status = "settled" if actual_units else "released"
     wallet = _wallet(conn,hold["user_id"])
     if not _can_cover_charge(conn,hold,actual_units,wallet):
         raise CreditError("insufficient_credits", "可用余额不足以支付确认的金额并覆盖其他已知待核费用。",402)
-    changed = conn.execute("UPDATE credit_holds SET status=?,actual_units=?,usage_json=?,reason=?,updated_at=? WHERE usage_id=? AND status=?",
+    guard = """AND dispatch_state='reserved' AND EXISTS (
+        SELECT 1 FROM api_usage_logs a WHERE a.id=credit_holds.usage_id
+        AND a.dispatch_state='reserved' AND a.completed_at IS NULL)""" if reserved_only else ""
+    changed = conn.execute(f"UPDATE credit_holds SET status=?,actual_units=?,usage_json=?,reason=?,updated_at=? WHERE usage_id=? AND status=? {guard}",
                            (status,actual_units,usage_json,reason,now_iso(),hold["usage_id"],hold["status"])).rowcount
     if not changed:
         raise CreditError("settlement_conflict", "积分结算状态已改变。",409)
+    conn.execute("DELETE FROM credit_hold_watch WHERE usage_id=?", (hold["usage_id"],))
     changed = conn.execute("UPDATE credit_wallets SET balance_units=balance_units-?,reserved_units=reserved_units-?,updated_at=? WHERE user_id=? AND reserved_units>=? AND balance_units-reserved_units+?>=?",
                            (actual_units,hold["amount_units"],now_iso(),hold["user_id"],hold["amount_units"],hold["amount_units"],actual_units)).rowcount
     if not changed:
@@ -373,9 +475,17 @@ def settle_credit(conn: sqlite3.Connection, usage_id: int, actual_units: int | N
                                           "original_actual_units":hold["actual_units"],"incoming_actual_units":actual_units,
                                           "incoming_usage_json":usage_json},separators=(",",":")),now_iso()))
                 return _result(hold)
-    if actual_units is None or not _can_cover_charge(conn,hold,actual_units,_wallet(conn,hold["user_id"])):
+    # The new image ceiling is an explicit admission budget: a higher image
+    # bill needs an audited decision even when spare funds exist. Keep legacy
+    # text-overrun settlement unchanged.
+    image_overrun = (actual_units is not None and actual_units > hold["amount_units"]
+                     and bool(json.loads(hold["pricing_snapshot"]).get("images")))
+    if image_overrun:
+        reason = "Image charge exceeded the reserved ceiling; manual reconciliation required."
+    if actual_units is None or image_overrun or not _can_cover_charge(conn,hold,actual_units,_wallet(conn,hold["user_id"])):
         conn.execute("UPDATE credit_holds SET status='reconciliation_required',actual_units=?,usage_json=?,reason=?,updated_at=? WHERE usage_id=? AND status=?",
                      (actual_units,usage_json,reason,now_iso(),usage_id,hold["status"]))
+        conn.execute("DELETE FROM credit_hold_watch WHERE usage_id=?", (usage_id,))
         _usage_state(conn,usage_id,"reconciliation_required",reserved=hold["amount_units"],usage_json=usage_json,reason=reason)
         return _result(_one(conn,"SELECT * FROM credit_holds WHERE usage_id=?",(usage_id,)))
     return _finalize(conn,hold,actual_units,reason,usage_json)
@@ -395,7 +505,12 @@ def resolve_credit_hold(conn: sqlite3.Connection, usage_id: int, actual_units: i
         return _result(hold)
     if hold["status"] != "reconciliation_required":
         raise CreditError("hold_not_pending","仅能人工处理待核记录。",409)
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STALE_HOLD_MINUTES)).isoformat()
+    complete_unsent = actual_units == 0 and _reserved_hold(conn, usage_id, cutoff) is not None
     result=_finalize(conn,hold,actual_units,reason,hold["usage_json"],actor_id)
+    if complete_unsent:
+        _complete_stale_unsent(conn, usage_id, cutoff)
+    conn.execute("DELETE FROM usage_dispatch_pending WHERE usage_id=?", (usage_id,))
     _audit(conn,reference=f"resolve:{usage_id}",actor_id=actor_id,action="resolve_hold",user_id=hold["user_id"],usage_id=usage_id,amount_units=actual_units,reason=reason)
     return result
 

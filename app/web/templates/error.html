@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}操作未完成 · {{ app_name }}{% endblock %}
+{% block page %}
+<div class="gate solo">
+  <section class="gate-card">
+    <p class="eyebrow">Signal · {{ status_code }}</p>
+    <div class="result-mark bad" aria-hidden="true">!</div>
+    <h2>{{ {400: '请求无效', 401: '需要重新登录', 403: '没有权限', 404: '找不到对象', 409: '与当前状态冲突', 413: '内容太大', 422: '表单不完整', 429: '操作太频繁'}.get(status_code, '操作未完成') }}</h2>
+    <div class="notice error" role="alert">{{ message }}</div>
+    <p class="muted small">这次提交没有生效。返回上一页修改后可以再试一次。</p>
+    <div class="foot"><a href="/developer">返回控制台</a><a href="/">首页</a></div>
+  </section>
+</div>
+{% endblock %}

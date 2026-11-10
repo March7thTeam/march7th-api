@@ -9,21 +9,28 @@ close their database connection before doing network I/O and later call
 
 from __future__ import annotations
 
+from functools import partial
+from app.utils.timefmt import now_iso as _now_iso
+
 import json
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 import logging
 from app.auth import api_user_eligible
 from app.admin_key_policy import ADMIN_EXEMPT_REASON, AdminKeyPolicyError, admin_unmetered
-from app.credit_ledger import CreditError, reserve_credit, settle_credit
+from app.credit_ledger import (CreditError, mark_credit_dispatched, recover_stale_usage,
+                               release_reserved_credit, reserve_credit, settle_credit)
+from app.dispatch_recovery import enqueue_usage
 from app.credit_pricing import BillingQuote, PricingError, billing_details, billing_receipt_present, calculate_charge
 
 
 UTC = timezone.utc
 MAX_SUMMARY_DAYS = 366
+GENERATION_PROTOCOLS = ("chat.completions", "responses")
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,41 @@ class UsageReservation:
     # allowlist.  Captured under the same reservation lock for /v1/models.
     model_ids: tuple[str, ...] | None = None
     admin_unmetered: bool = False
+
+
+def finish_unsent_usage(connect, reservation: UsageReservation, **completion) -> bool:
+    """Try two independent database connections, honoring their busy timeout."""
+    logger = logging.getLogger("luomoapi.usage")
+    for attempt in range(2):
+        try:
+            with closing(connect()) as conn:
+                if complete_usage(conn, reservation, dispatched=False, **completion):
+                    return True
+        except Exception:
+            logger.exception("unsent_cleanup_attempt_failed usage_id=%s request_id=%s",
+                             reservation.id, reservation.request_id)
+        if attempt == 0:
+            time.sleep(0.05)
+    logger.error("unsent_cleanup_failed usage_id=%s request_id=%s",
+                 reservation.id, reservation.request_id)
+    return False
+
+
+def mark_usage_dispatched(conn: sqlite3.Connection, reservation: UsageReservation) -> bool:
+    """Commit the send boundary and the credit marker in one short transaction."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    updated = conn.execute("""UPDATE api_usage_logs SET dispatch_state='dispatched'
+        WHERE id=? AND request_id=? AND completed_at IS NULL AND dispatch_state='reserved'""",
+        (reservation.id, reservation.request_id))
+    if updated.rowcount != 1:
+        conn.rollback()
+        raise RuntimeError("Usage reservation is no longer dispatchable")
+    if conn.execute("SELECT 1 FROM credit_holds WHERE usage_id=?", (reservation.id,)).fetchone():
+        mark_credit_dispatched(conn, reservation.id)
+    conn.execute("DELETE FROM usage_dispatch_pending WHERE usage_id=?", (reservation.id,))
+    conn.commit()
+    return True
 
 
 def _row_value(row: Any, name: str, default: Any = None) -> Any:
@@ -70,9 +112,7 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
 
 
-def iso_now() -> str:
-    return datetime.now(UTC).isoformat()
-
+iso_now = partial(_now_iso, timespec="microseconds")
 
 def get_key_models(conn: sqlite3.Connection, key_id: int) -> list[str]:
     """Return the exact model IDs assigned to an API key.
@@ -151,6 +191,9 @@ def _usage_count(conn: sqlite3.Connection, key_id: int, since: datetime) -> int:
         WHERE api_key_id=? AND COALESCE(started_at, created_at)>=?
           AND COALESCE(protocol, '') <> 'models'
           AND public_path NOT IN ('v1/models', '/v1/models')
+          AND COALESCE(dispatch_state, '') <> 'not_dispatched'
+          AND NOT (COALESCE(protocol, '')='public'
+                   AND COALESCE(outcome, '') IN ('route_changed', 'route_disabled', 'not_found'))
         """,
         (key_id, since.isoformat()),
     ).fetchone()
@@ -189,6 +232,26 @@ def quota_rejection(conn: sqlite3.Connection, key_row: Any, now: datetime | None
     return None
 
 
+def public_route_rejection(
+    conn: sqlite3.Connection, route_id: int, expected_route: Any = None,
+) -> QuotaRejection | None:
+    """Recheck the exact target and authorization used to construct a request."""
+    route = conn.execute("""SELECT r.*, a.base_url, a.auth_type, a.secret_ref,
+        a.enabled AS upstream_enabled, a.updated_at AS upstream_updated_at
+        FROM public_gateway_routes r JOIN apis a ON a.id=r.target_api_id WHERE r.id=?""",
+        (route_id,)).fetchone()
+    if not route:
+        return QuotaRejection("not_found", "Public route not found.", 404)
+    if not route["enabled"] or not route["upstream_enabled"]:
+        return QuotaRejection("route_disabled", "This route is documented but not currently enabled.", 404)
+    fields = ("target_api_id", "base_url", "target_method", "target_path", "required_scope",
+              "allow_anonymous", "enabled", "upstream_enabled", "auth_type", "secret_ref",
+              "public_path", "updated_at", "upstream_updated_at")
+    if expected_route is not None and any(route[name] != _row_value(expected_route, name) for name in fields):
+        return QuotaRejection("route_changed", "This route changed during admission; retry the request.", 404)
+    return None
+
+
 def reserve_usage(
     conn: sqlite3.Connection,
     key_row: Any,
@@ -200,6 +263,7 @@ def reserve_usage(
     method: str,
     public_path: str,
     route_id: int | None = None,
+    route_snapshot: Any = None,
     target_url_masked: str | None = None,
     client_ip_hash: str | None = None,
     user_agent_preview: str | None = None,
@@ -209,6 +273,8 @@ def reserve_usage(
     model_id: str | None = None,
     billing_quote: BillingQuote | None = None,
     expected_admin_unmetered: bool | None = None,
+    session_id: int | None = None,
+    expected_user_id: int | None = None,
 ) -> tuple[UsageReservation | None, QuotaRejection | None]:
     """Atomically check quotas and insert an in-flight usage reservation."""
 
@@ -217,9 +283,15 @@ def reserve_usage(
         return None, QuotaRejection("quota_error", "API key quota could not be checked.", 503)
     started_at = iso_now()
     try:
+        recover_stale_usage(conn)
         # BEGIN IMMEDIATE serializes the check and reservation.  No caller may
         # perform HTTP work while this transaction or connection is retained.
         conn.execute("BEGIN IMMEDIATE")
+        if protocol == "public" and route_id is not None:
+            rejection = public_route_rejection(conn, route_id, route_snapshot)
+            if rejection:
+                conn.rollback()
+                return None, rejection
         # Re-read mutable admission state after acquiring the write lock.  A
         # concurrent revoke, suspension, expiry, scope, or model-policy edit
         # therefore takes effect before this request leaves the process.
@@ -234,6 +306,13 @@ def reserve_usage(
         if not current or current["status"] != "active" or not api_user_eligible(current["user_status"]):
             conn.rollback()
             return None, QuotaRejection("permission_error", "User or API key is not active.", 403)
+        if expected_user_id is not None:
+            live_session = conn.execute("""SELECT 1 FROM user_sessions WHERE id=? AND user_id=?
+                AND revoked_at IS NULL AND julianday(expires_at)>julianday(?)""",
+                (session_id, expected_user_id, started_at)).fetchone()
+            if current["user_id"] != expected_user_id or not live_session:
+                conn.rollback()
+                return None, QuotaRejection("permission_error", "Session or key ownership changed; sign in again.", 403)
         # The models endpoint deliberately skips request-count quota checks,
         # but expiry remains an admission rule and must be checked again under
         # this transaction after the mutable row has been re-read.
@@ -304,8 +383,10 @@ def reserve_usage(
                 ADMIN_EXEMPT_REASON if exempt else None,
             ),
         )
+        conn.execute("UPDATE api_usage_logs SET dispatch_state='reserved' WHERE id=?", (cursor.lastrowid,))
         if billing_quote is not None and not exempt:
             reserve_credit(conn, int(cursor.lastrowid), int(current["user_id"]), billing_quote.amount_units, billing_quote.snapshot)
+        enqueue_usage(conn, int(cursor.lastrowid), request_id, started_at)
         conn.commit()
         return UsageReservation(int(cursor.lastrowid), request_id, started_at, current_model_ids, exempt), None
     except CreditError as exc:
@@ -353,6 +434,7 @@ def complete_usage(
     completed_at: str | None = None,
     billing_usage: dict | None = None,
     billing_release: bool = False,
+    dispatched: bool | None = None,
 ) -> bool:
     """Finalize a reservation from a fresh connection after network I/O."""
 
@@ -367,8 +449,28 @@ def complete_usage(
     try:
         conn.execute("BEGIN IMMEDIATE")
         hold = conn.execute("SELECT * FROM credit_holds WHERE usage_id=?", (row_id,)).fetchone()
+        if dispatched is False:
+            row = conn.execute("SELECT * FROM api_usage_logs WHERE id=?", (row_id,)).fetchone()
+            if not row or (isinstance(reservation, UsageReservation) and row["request_id"] != reservation.request_id):
+                conn.rollback()
+                return False
+            if row["dispatch_state"] == "not_dispatched" and row["completed_at"] is not None:
+                if hold and hold["status"] != "released":
+                    conn.rollback()
+                    return False
+                conn.execute("DELETE FROM usage_dispatch_pending WHERE usage_id=?", (row_id,))
+                conn.commit()
+                return True
+            if hold and not release_reserved_credit(conn, row_id, reason="Request failed before dispatch."):
+                conn.rollback()
+                return False
+            updated = conn.execute("""UPDATE api_usage_logs SET dispatch_state='not_dispatched'
+                WHERE id=? AND dispatch_state='reserved' AND completed_at IS NULL""", (row_id,))
+            if updated.rowcount != 1:
+                conn.rollback()
+                return False
         accepted_billing = False
-        if hold:
+        if hold and dispatched is not False:
             actual = None
             reason = "Upstream usage was unavailable; frozen funds require reconciliation."
             if billing_usage is not None:
@@ -430,6 +532,7 @@ def complete_usage(
             conn.execute("""UPDATE api_usage_logs SET credit_usage_json=?
                             WHERE id=? AND credit_status='admin_exempt' AND credit_usage_json IS NULL""",
                          (json.dumps(receipt, separators=(",", ":"), sort_keys=True), row_id))
+        conn.execute("DELETE FROM usage_dispatch_pending WHERE usage_id=?", (row_id,))
         conn.commit()
         return conn.execute("SELECT 1 FROM api_usage_logs WHERE id=?", (row_id,)).fetchone() is not None
     except (sqlite3.DatabaseError, CreditError):
@@ -470,6 +573,7 @@ def insert_usage(
     usage_reported: bool = False,
     request_preview: str | None = None,
     response_preview: str | None = None,
+    dispatched: bool | None = None,
 ) -> int | None:
     """Insert a completed non-reserved usage row for legacy callers."""
 
@@ -478,6 +582,10 @@ def insert_usage(
     if not usage_reported:
         input_tokens = output_tokens = total_tokens = None
     try:
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        if route_id is not None and not conn.execute("SELECT 1 FROM public_gateway_routes WHERE id=?", (route_id,)).fetchone():
+            route_id = None
         cur = conn.execute(
             """
             INSERT INTO api_usage_logs(
@@ -486,8 +594,8 @@ def insert_usage(
                 client_ip_hash, user_agent_preview, error_summary,
                 request_preview, response_preview, request_id, protocol, model,
                 streamed, outcome, started_at, completed_at, first_byte_ms,
-                input_tokens, output_tokens, total_tokens, usage_reported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                input_tokens, output_tokens, total_tokens, usage_reported, dispatch_state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 started_at,
@@ -517,6 +625,7 @@ def insert_usage(
                 output_tokens,
                 total_tokens,
                 1 if usage_reported else 0,
+                None if dispatched is None else ("dispatched" if dispatched else "not_dispatched"),
             ),
         )
         conn.commit()
@@ -526,6 +635,7 @@ def insert_usage(
             conn.rollback()
         except sqlite3.DatabaseError:
             pass
+        logging.getLogger("luomoapi.usage").exception("usage_insert_failed request_id=%s public_path=%s", request_id, public_path)
         return None
 
 
@@ -759,16 +869,56 @@ def _summary_cutoff(days: int) -> datetime:
     return datetime.now(UTC) - timedelta(days=days)
 
 
-def read_usage_summary(user_id: int | None, days: int = 7) -> dict[str, Any]:
-    """Return dashboard-safe usage aggregates and at most 100 recent rows."""
+@dataclass(frozen=True)
+class UsageWindow:
+    start: datetime
+    end: datetime
+
+
+def usage_window(days: int) -> UsageWindow:
+    """Compute one half-open UTC calendar window shared by charts and details."""
+    if isinstance(days, bool) or not isinstance(days, int) or days not in {7, 14, 30}:
+        raise ValueError("days must be 7, 14 or 30")
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return UsageWindow(today - timedelta(days=days - 1), today + timedelta(days=1))
+
+
+def _usage_window_filter(window: UsageWindow, timestamp: str) -> tuple[str, list[str]]:
+    # SQLite datetime() normalizes Z, offsets, space separators and naive UTC.
+    # First search the existing expression index over a date envelope. The
+    # extra day on each side covers every supported ISO timezone offset.
+    where = f"""{timestamp}>=? AND {timestamp}<?
+        AND datetime({timestamp})>=? AND datetime({timestamp})<?"""
+    return where, [
+        str((window.start - timedelta(days=1)).date()),
+        str((window.end + timedelta(days=1)).date()),
+        window.start.strftime("%Y-%m-%d %H:%M:%S"),
+        window.end.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+
+
+def read_usage_summary(user_id: int | None, days: int = 7, *, window: UsageWindow | None = None) -> dict[str, Any]:
+    """Return dashboard-safe usage aggregates and at most 100 recent rows.
+
+    ``window`` shares the chart's UTC boundaries and normalization. Without
+    it the legacy rolling ``days`` cutoff and timestamp behavior are preserved.
+    """
 
     from app.db import connect  # local import avoids importing app config here
 
-    cutoff = _summary_cutoff(days).isoformat()
     # Models/list and the older public gateway have separate accounting; this
     # dashboard is specifically for the two text generation protocols.
-    where = "protocol IN ('chat.completions', 'responses') AND COALESCE(started_at, created_at)>=?"
-    args: list[Any] = [cutoff]
+    timestamp = "COALESCE(started_at, created_at)"
+    if window is None:
+        time_filter, args = f"{timestamp}>=?", [_summary_cutoff(days).isoformat()]
+        day_sql = f"substr({timestamp}, 1, 10)"
+        order_sql = timestamp
+    else:
+        time_filter, args = _usage_window_filter(window, timestamp)
+        day_sql = f"date(datetime({timestamp}))"
+        order_sql = f"datetime({timestamp})"
+    where = "protocol IN (?, ?) AND " + time_filter
+    args = [*GENERATION_PROTOCOLS, *args]
     if user_id is not None:
         where += " AND user_id=?"
         args.append(int(user_id))
@@ -835,7 +985,7 @@ def read_usage_summary(user_id: int | None, days: int = 7) -> dict[str, Any]:
             ]
             rows = conn.execute(
                 f"""
-                SELECT substr(COALESCE(started_at, created_at), 1, 10) AS day,
+                SELECT {day_sql} AS day,
                        COUNT(*) AS requests,
                        SUM(CASE WHEN outcome IN ('succeeded','completed') OR success=1 THEN 1 ELSE 0 END) AS succeeded,
                        SUM(CASE WHEN (completed_at IS NOT NULL OR (outcome IS NOT NULL AND outcome!='in_flight')) AND COALESCE(success,0)=0 THEN 1 ELSE 0 END) AS failed,
@@ -856,7 +1006,7 @@ def read_usage_summary(user_id: int | None, days: int = 7) -> dict[str, Any]:
                        input_tokens, output_tokens, total_tokens, usage_reported,
                        credit_status, credit_charged_units
                 FROM api_usage_logs WHERE {where}
-                ORDER BY COALESCE(started_at, created_at) DESC, id DESC LIMIT 100
+                ORDER BY {order_sql} DESC, id DESC LIMIT 100
                 """,
                 args,
             ).fetchall()
@@ -884,4 +1034,81 @@ __all__ = [
     "quota_rejection",
     "read_usage_summary",
     "reserve_usage",
+    "usage_analytics",
 ]
+
+
+def usage_analytics(user_id: int | None, days: int = 14, *, window: UsageWindow | None = None,
+                    protocols: Iterable[str] | None = None) -> dict:
+    """UTC calendar-day aggregates; settled hold units are the charge authority.
+
+    Sum integer units in Python so administrator totals cannot overflow SQLite's
+    signed 64-bit SUM or acquire floating-point rounding. ``protocols=None``
+    preserves the all-protocol API default; pages opt into generation only.
+    """
+    from contextlib import closing
+    from app.db import connect
+    from app.credit_ledger import units_to_credits
+
+    if isinstance(days, bool) or not isinstance(days, int) or days not in {7, 14, 30}:
+        raise ValueError("days must be 7, 14 or 30")
+    window = window or usage_window(days)
+    start = window.start.date()
+    today = (window.end - timedelta(days=1)).date()
+    fields = ("requests", "succeeded", "failed", "in_flight", "input_tokens", "output_tokens", "actual_units")
+
+    def empty(**labels):
+        return {**labels, **dict.fromkeys(fields, 0)}
+
+    def add(target, values):
+        for name in fields:
+            target[name] += values[name]
+
+    def display(row):
+        return {**{k: v for k, v in row.items() if k != "actual_units"}, "credits": units_to_credits(row["actual_units"])}
+
+    daily = {str(start + timedelta(days=i)): empty(day=str(start + timedelta(days=i))) for i in range(days)}
+    models, keys = {}, {}
+    totals = empty()
+    where, params = _usage_window_filter(window, "COALESCE(a.started_at,a.created_at)")
+    if protocols is not None:
+        protocols = tuple(protocols)
+        where += " AND a.protocol IN (" + ",".join("?" for _ in protocols) + ")"
+        params.extend(protocols)
+    if user_id is not None:
+        where += " AND a.user_id=?"
+        params.append(user_id)
+    with closing(connect()) as conn:
+        # One read snapshot includes counters and charges from the same settlement.
+        rows = conn.execute(f"""SELECT date(datetime(COALESCE(a.started_at,a.created_at))) AS day,
+            a.model,a.api_key_id,k.name AS key_name,k.key_prefix,a.success,a.outcome,a.completed_at,
+            a.input_tokens,a.output_tokens,
+            CASE WHEN h.status='settled' THEN h.actual_units ELSE 0 END AS actual_units
+            FROM api_usage_logs a LEFT JOIN api_keys k ON k.id=a.api_key_id AND k.user_id=a.user_id
+            LEFT JOIN credit_holds h ON h.usage_id=a.id AND h.user_id=a.user_id WHERE {where}""", params)
+        for row in rows:
+            success = row["success"] == 1 or row["outcome"] in {"succeeded", "completed"}
+            in_flight = row["success"] is None and row["outcome"] == "in_flight" and not row["completed_at"]
+            values = dict(requests=1, succeeded=int(success), failed=int(not success and not in_flight),
+                          in_flight=int(in_flight), input_tokens=int(row["input_tokens"] or 0),
+                          output_tokens=int(row["output_tokens"] or 0), actual_units=int(row["actual_units"] or 0))
+            model = row["model"] or "未记录模型"
+            key_id = row["api_key_id"]
+            model_row = models.setdefault(model, empty(model=model, name=model))
+            key_row = keys.setdefault(key_id, empty(key_id=key_id, name=row["key_name"] or "未关联密钥", key_prefix=row["key_prefix"]))
+            for target in (daily[row["day"]], totals, model_row, key_row):
+                add(target, values)
+
+    def top(mapping, kind):
+        ordered = sorted(mapping.values(), key=lambda r: (-r["requests"], str(r.get(kind))))
+        result = ordered[:10]
+        if len(ordered) > 10:
+            other = empty(name="其他", **{kind: None}, other=True)
+            for row in ordered[10:]:
+                add(other, row)
+            result.append(other)
+        return [display(row) for row in result]
+
+    return {"days": days, "timezone": "UTC", "start_date": str(start), "end_date": str(today),
+            "totals": display(totals), "daily": [display(row) for row in daily.values()],
+            "by_model": top(models, "model"), "by_key": top(keys, "key_id")}

@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.ai_catalog import snapshot
 from app.auth import optional_user, require_developer, require_admin
-from app.ai_usage import read_usage_summary, get_key_models
+from app.ai_usage import read_usage_summary, get_key_models, usage_analytics, usage_window
 from app.db import connect
 from app.ai_policies import validate_policy
 
@@ -32,14 +32,23 @@ def key_views(user_id=None):
         return [{**dict(row), "models": get_key_models(conn, row["id"])} for row in rows]
 
 
+def _page_days(value: str | None) -> int:
+    """Range picker for the usage pages; anything unexpected falls back to two weeks."""
+    return {"7": 7, "14": 14, "30": 30}.get((value or "").strip(), 14)
+
+
 @router.get("/developer/usage", response_class=HTMLResponse)
-def usage_page(request: Request, user=Depends(require_developer)):
-    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(user["id"]), "all_users": False})
+def usage_page(request: Request, user=Depends(require_developer), days: str | None = None):
+    span = _page_days(days)
+    window = usage_window(span)
+    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(user["id"], window=window), "all_users": False, "analytics": usage_analytics(user["id"], span, window=window, protocols=("chat.completions", "responses"))})
 
 
 @router.get("/admin/ai-usage", response_class=HTMLResponse)
-def admin_usage(request: Request, user=Depends(require_admin)):
-    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(None), "all_users": True})
+def admin_usage(request: Request, user=Depends(require_admin), days: str | None = None):
+    span = _page_days(days)
+    window = usage_window(span)
+    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(None, window=window), "all_users": True, "analytics": usage_analytics(None, span, window=window, protocols=("chat.completions", "responses"))})
 
 
 @router.get("/api/developer/usage")
@@ -49,7 +58,8 @@ def usage_api(user=Depends(require_developer)):
 
 @router.get("/developer/playground", response_class=HTMLResponse)
 async def playground(request: Request, user=Depends(require_developer)):
-    return templates.TemplateResponse(request, "ai_playground.html", {"user": user, "catalog": await snapshot()})
+    from app.image_input import image_input_enabled
+    return templates.TemplateResponse(request, "ai_playground.html", {"user": user, "catalog": await snapshot(), "keys": key_views(user["id"]), "image_input": image_input_enabled()})
 
 
 @router.get("/admin/ai-keys/{key_id}", response_class=HTMLResponse)
@@ -74,3 +84,19 @@ def save_policy(key_id: int, scopes: str = Form(...), models: str = Form(""), mo
         conn.executemany("INSERT INTO api_key_models(api_key_id,model_id) VALUES (?,?)", [(key_id,model) for model in model_ids])
         conn.commit()
     return RedirectResponse(f"/admin/ai-keys/{key_id}?saved=1", status_code=303)
+
+
+def analytics_response(user_id, days):
+    if days not in {7, 14, 30}:
+        raise HTTPException(400, "days 仅支持 7、14、30。")
+    return JSONResponse(usage_analytics(user_id, days), headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/developer/usage/analytics")
+def developer_analytics(days: int = 14, user=Depends(require_developer)):
+    return analytics_response(user["id"], days)
+
+
+@router.get("/api/admin/usage/analytics")
+def admin_analytics(days: int = 14, user=Depends(require_admin)):
+    return analytics_response(None, days)

@@ -121,7 +121,7 @@ class InterchangeTests(unittest.TestCase):
 
     def test_every_console_page_renders_for_admin(self):
         name, _ = _user("render_admin", role="admin")
-        self.client.cookies.set(SESSION_COOKIE, create_session(name))
+        self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username=name))
         for path in ("/developer", "/developer/keys", "/developer/logs", "/developer/usage", "/developer/credits", "/developer/playground",
                      "/admin", "/admin/users", "/admin/api-keys", "/admin/key-requests", "/admin/credits", "/admin/ai-usage",
                      "/admin/routes", "/admin/logs", "/apis", "/tester", "/logs", "/secrets", "/settings"):
@@ -131,7 +131,7 @@ class InterchangeTests(unittest.TestCase):
 
     def test_static_assets_are_cacheable_even_with_a_session(self):
         name, _ = _user("static_viewer")
-        self.client.cookies.set(SESSION_COOKIE, create_session(name))
+        self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username=name))
         fingerprinted = self.client.get(asset("interchange.css"))
         self.assertEqual(fingerprinted.status_code, 200)
         self.assertIn("immutable", fingerprinted.headers["cache-control"])
@@ -276,7 +276,7 @@ class InterchangeTests(unittest.TestCase):
 
     def test_admin_cannot_change_own_status(self):
         name, user_id = _user("self_admin", role="admin")
-        self.client.cookies.set(SESSION_COOKIE, create_session(name))
+        self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username=name))
         response = self.client.post(f"/admin/users/{user_id}/status", data={"status_value": "disabled"}, headers=ORIGIN, follow_redirects=False)
         self.assertEqual(response.status_code, 400)
         with connect() as conn:

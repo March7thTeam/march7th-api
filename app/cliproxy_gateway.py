@@ -13,28 +13,34 @@ import os
 import secrets
 import time
 import logging
+from functools import partial
+from app.utils.errors import json_error as _json_error
+json_error = partial(_json_error, openai=True)
 from contextlib import closing
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 import anyio
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
-from app.auth import api_user_eligible
+from app.auth import api_user_eligible, require_developer
+from app.credit_pricing import priced_models
 from app.admin_key_policy import AdminKeyPolicyError, admin_unmetered
 from app.credit_pricing import (AUTO_OUTPUT_TIERS, DEFAULT_OUTPUT_TOKENS, PricingError, billing_details, billing_receipt_present,
                                 output_limit_requested, prepare_billable_request)
-from app.credit_ledger import mark_credit_dispatched, wallet_snapshot
+from app.credit_ledger import recover_stale_usage, wallet_snapshot
 
 from app.ai_usage import (
     SSEUsageParser,
     UsageReservation,
     complete_usage,
+    finish_unsent_usage,
     extract_json_usage,
     get_key_models,
     model_allowed,
+    mark_usage_dispatched,
     reserve_usage,
 )
 from app.public_gateway_secure import (
@@ -133,6 +139,7 @@ def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str
 def _available_credit_units(user_id: int) -> int:
     """Advisory read used only to size an unspecified output limit; the reservation re-checks atomically."""
     with closing(connect()) as conn:
+        recover_stale_usage(conn)
         return int(wallet_snapshot(conn, int(user_id))["available_units"])
 
 
@@ -147,30 +154,6 @@ def _auto_output_limit(payload: dict, protocol: str, available_units: int) -> in
 
 def _request_id(request: Request) -> str:
     return request_id_for(request)
-
-
-def json_error(
-    status_code: int,
-    error: str,
-    message: str,
-    *,
-    request_id: str | None = None,
-    param: str | None = None,
-    code: str | None = None,
-) -> JSONResponse:
-    """Return an OpenAI-shaped error with a stable trace header."""
-
-    request_id = request_id or secrets.token_hex(16)
-    payload: dict[str, Any] = {"message": message, "type": error}
-    if param is not None:
-        payload["param"] = param
-    if code is not None:
-        payload["code"] = code
-    return JSONResponse(
-        status_code=status_code,
-        content={"error": payload},
-        headers={"X-Request-ID": request_id},
-    )
 
 
 def route_is_authorized(key_row: Any) -> bool:
@@ -195,13 +178,18 @@ def endpoint_is_authorized(key_row: Any, path: str) -> bool:
     return route_is_authorized(key_row) or has_exact_scope(key_row, NEW_SCOPES[path])
 
 
-def _load_authorization(raw_key: str, endpoint: str) -> tuple[dict[str, Any] | None, set[str] | None, tuple[int, str, str | None] | None]:
+def _load_authorization(raw_key: str | None, endpoint: str, *, user_id: int | None = None, key_id: int | None = None) -> tuple[dict[str, Any] | None, set[str] | None, tuple[int, str, str | None] | None]:
     """Synchronous DB/PBKDF2 portion run off the async event loop."""
 
     with closing(connect()) as conn:
-        key, user = verify_api_key(conn, raw_key)
-        if not key or not user:
-            return None, None, (401, "Invalid or missing API key.", None)
+        if user_id is None:
+            key, user = verify_api_key(conn, raw_key)
+            if not key or not user:
+                return None, None, (401, "Invalid or missing API key.", None)
+        else:
+            key = conn.execute("SELECT id FROM api_keys WHERE id=? AND user_id=?", (key_id, user_id)).fetchone()
+            if not key:
+                return None, None, (403, "API key does not belong to the current user.", None)
         # PBKDF2 can be slow: re-read key and owner state together afterwards.
         key = conn.execute("""SELECT k.*, u.role AS user_role, u.status AS user_status
                               FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.id=?""", (key["id"],)).fetchone()
@@ -246,10 +234,9 @@ def _reserve_gateway_usage(key_row: dict[str, Any], **kwargs):
 
 def _mark_dispatch(reservation: UsageReservation):
     with closing(connect()) as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        if conn.execute("SELECT 1 FROM credit_holds WHERE usage_id=?", (reservation.id,)).fetchone():
-            mark_credit_dispatched(conn, reservation.id)
-        conn.commit()
+        if mark_usage_dispatched(conn, reservation) is not True:
+            raise RuntimeError("Usage dispatch marker was not committed")
+    return True
 
 
 def _response_declares_oversize(upstream: httpx.Response) -> bool:
@@ -393,10 +380,16 @@ def _finish(
     billing_usage: dict | None = None,
     billing_release: bool = False,
     billing_receipt_seen: bool = False,
+    dispatched: bool = True,
 ) -> None:
     """Finalize accounting through a fresh connection, outside network I/O."""
 
     if not reservation:
+        return
+    if not dispatched:
+        finish_unsent_usage(connect, reservation, status_code=status_code,
+            response_time_ms=response_time_ms, first_byte_ms=None, success=False,
+            outcome="gateway_error_not_dispatched", error_summary=error_summary)
         return
     input_tokens, output_tokens, total_tokens, usage_reported = usage
     try:
@@ -615,8 +608,15 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
     if not raw_key:
         return json_error(401, "authentication_error", "Invalid or missing API key.", request_id=request_id)
 
+    return await execute_gateway(endpoint, request, raw_key=raw_key)
+
+
+async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | None = None,
+                          session_user=None, key_id: int | None = None, provided_payload: dict | None = None):
+    """One admission, quote, reservation, transport and settlement path for both entry points."""
+    request_id = _request_id(request)
+    expected_method = ENDPOINT_METHODS[endpoint]
     key_row: dict[str, Any] | None = None
-    user_row: Any = None
     allowed_ids: set[str] | None = None
     payload: dict[str, Any] | None = None
     reservation: UsageReservation | None = None
@@ -625,7 +625,11 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
     try:
         # Authentication/model reads happen before the reservation and the
         # connection is closed before request streaming or upstream I/O.
-        key_row, allowed_ids, auth_failure = await run_in_threadpool(_load_authorization, raw_key, endpoint)
+        if session_user is None:
+            key_row, allowed_ids, auth_failure = await run_in_threadpool(_load_authorization, raw_key, endpoint)
+        else:
+            key_row, allowed_ids, auth_failure = await run_in_threadpool(_load_authorization, None, endpoint,
+                user_id=session_user["id"], key_id=key_id)
         if auth_failure:
             status_code, message, failure_code = auth_failure
             return json_error(status_code, "authentication_error" if status_code == 401 else "permission_error", message, request_id=request_id, code=failure_code)
@@ -636,7 +640,8 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
             if content_type and content_type != "application/json":
                 return json_error(415, "invalid_request_error", "Content-Type must be application/json.", request_id=request_id, param="content-type", code="unsupported_media_type")
             try:
-                body = await read_bounded_body(request)
+                body = (json.dumps(provided_payload, ensure_ascii=False, allow_nan=False).encode()
+                        if provided_payload is not None else await read_bounded_body(request))
             except ValueError as exc:
                 if str(exc) == "request_too_large":
                     return json_error(413, "invalid_request_error", "Request body is too large.", request_id=request_id, code="request_too_large")
@@ -682,7 +687,7 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
             model=payload.get("model") if payload else None,
             streamed=streamed_request,
             method=expected_method,
-            public_path=endpoint.lstrip("/"),
+            public_path=(f"developer/playground/run/{ENDPOINT_PROTOCOLS[endpoint]}" if session_user is not None else endpoint.lstrip("/")),
             target_url_masked=mask_url(target_url),
             client_ip_hash=None,
             user_agent_preview=None,
@@ -692,6 +697,7 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
             model_id=payload.get("model") if payload else None,
             billing_quote=billing_quote,
             expected_admin_unmetered=expected_admin_unmetered,
+            **({"session_id": request.state.session_id, "expected_user_id": session_user["id"]} if session_user is not None else {}),
         )
         if rejection:
             return json_error(rejection.status_code, "rate_limit_error" if rejection.code == "rate_limited" else rejection.code, rejection.message, request_id=request_id, code=rejection.code)
@@ -714,7 +720,8 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
                 content=body if endpoint != "/v1/models" else None,
                 timeout=httpx.Timeout(connect=15.0, read=120.0, write=60.0, pool=15.0),
             )
-            await run_in_threadpool(_mark_dispatch, reservation)
+            if await run_in_threadpool(_mark_dispatch, reservation) is not True:
+                raise RuntimeError("Usage dispatch marker failed")
             dispatched = True
             upstream = await client.send(upstream_request, stream=True)
         except httpx.TimeoutException as exc:
@@ -727,6 +734,7 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
                 response_time_ms=int((time.monotonic() - started) * 1000),
                 first_byte_ms=None,
                 outcome="upstream_timeout",
+                dispatched=dispatched,
                 success=False,
                 error_summary=type(exc).__name__,
             )
@@ -741,6 +749,7 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
                 response_time_ms=int((time.monotonic() - started) * 1000),
                 first_byte_ms=None,
                 outcome="upstream_error",
+                dispatched=dispatched,
                 success=False,
                 error_summary=type(exc).__name__,
             )
@@ -927,7 +936,8 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
             if reservation is not None:
                 await _finish_async(reservation, key_row=key_row, request_id=request_id, status_code=None,
                                     response_time_ms=None, first_byte_ms=None, outcome="client_disconnect", success=False,
-                                    error_summary="Request cancelled before final usage was received.", billing_release=not dispatched)
+                                    error_summary="Request cancelled before final usage was received.",
+                                    billing_release=not dispatched, dispatched=dispatched)
         raise
     except Exception as exc:
         # A reservation can exist only after key_row is populated.  Close any
@@ -947,6 +957,7 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
                 response_time_ms=int((time.monotonic() - started) * 1000) if "started" in locals() else None,
                 first_byte_ms=None,
                 outcome="gateway_error",
+                dispatched=dispatched,
                 success=False,
                 error_summary="Gateway failed to process the request.",
                 billing_release=not dispatched,
@@ -969,3 +980,44 @@ __all__ = [
     "route_is_authorized",
     "stream_body",
 ]
+
+
+@router.post("/developer/playground/run")
+async def playground_run(request: Request, user=Depends(require_developer)):
+    request_id = _request_id(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        return json_error(415, "invalid_request_error", "Content-Type must be application/json.", request_id=request_id, code="unsupported_media_type")
+    try:
+        body = await read_bounded_body(request)
+        def reject_constant(value):
+            raise ValueError("Non-finite JSON")
+        envelope = json.loads(body, parse_constant=reject_constant)
+        if not isinstance(envelope, dict):
+            raise ValueError("Expected a JSON object.")
+        key_id = envelope.get("key_id")
+        endpoint = envelope.get("endpoint")
+        payload = envelope.get("payload")
+        if isinstance(key_id, bool) or not isinstance(key_id, int) or not 0 < key_id <= 9223372036854775807:
+            raise ValueError("key_id must be a positive integer.")
+        if endpoint not in {"chat.completions", "responses"} or not isinstance(payload, dict):
+            raise ValueError("Use endpoint chat.completions or responses and an object payload.")
+    except (ValueError, TypeError, UnicodeDecodeError) as exc:
+        if str(exc) == "request_too_large":
+            return json_error(413, "invalid_request_error", "Request body is too large.", request_id=request_id, code="request_too_large")
+        return json_error(400, "invalid_request_error", "Invalid playground request.", request_id=request_id, param="body")
+    path = "/v1/chat/completions" if endpoint == "chat.completions" else "/v1/responses"
+    return await execute_gateway(path, request, session_user=user, key_id=key_id, provided_payload=payload)
+
+
+@router.get("/developer/playground/models")
+async def playground_models(request: Request, key_id: int = Query(..., gt=0, le=9223372036854775807), user=Depends(require_developer)):
+    from app.ai_catalog import snapshot
+    key, allowed, failure = await run_in_threadpool(_load_authorization, None, "/v1/models", user_id=user["id"], key_id=key_id)
+    if failure:
+        status, message, code = failure
+        return json_error(status, "permission_error", message, request_id=_request_id(request), code=code)
+    catalog = await snapshot()
+    priced = set(priced_models())
+    models = [item for item in catalog["models"] if item["id"] in priced
+              and not item["id"].startswith("gpt-image-") and (allowed is None or item["id"] in allowed)]
+    return JSONResponse({"object": "list", "data": models}, headers={"Cache-Control": "no-store"})

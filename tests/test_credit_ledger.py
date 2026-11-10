@@ -448,6 +448,8 @@ class LedgerCase(unittest.TestCase):
         mark_credit_dispatched(self.conn,usage_id)
         old=(datetime.now(timezone.utc)-timedelta(minutes=16)).isoformat()
         self.conn.execute("UPDATE credit_holds SET created_at=? WHERE usage_id=?",(old,usage_id))
+        # watch 到期时间在发送时确定，回拨 hold 时间的夹具也要同步回拨 watch。
+        self.conn.execute("UPDATE credit_hold_watch SET due_at=? WHERE usage_id=?",((datetime.fromisoformat(old)+timedelta(minutes=15)).isoformat(timespec="microseconds"),usage_id))
         self.assertEqual(recover_stale_holds(self.conn),1)
         self.assertEqual(recover_stale_holds(self.conn),0)
         self.conn.commit()
@@ -624,7 +626,7 @@ class ConsoleCase(unittest.TestCase):
         LedgerCase.tearDown(self)
 
     def login(self,name):
-        self.client.cookies.set(auth.SESSION_COOKIE,auth.create_session(name))
+        self.client.cookies.set(auth.SESSION_COOKIE,auth.create_session(user_id_or_username=name))
 
     def test_pending_wallet_access_and_admin_boundary(self):
         self.assertEqual(self.client.get("/api/developer/credits").status_code,401)

@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.credit_pricing import priced_models
+from app.image_input import supports_vision
 from app.db import connect
 from app.model_lines import board_state, line_for, verification_note
 
@@ -108,7 +109,7 @@ async def snapshot():
             text_candidate = billable and not model_id.startswith("gpt-image-")
             checked = public_verification(verification, model_id)
             entries.append({"id": model_id, "name": name, "category": category, "use": use, "billable": billable,
-                            "text_candidate": text_candidate, "line": line_for(model_id), "state": board_state(model_id, text_candidate),
+                            "text_candidate": text_candidate, "vision": supports_vision(model_id), "line": line_for(model_id), "state": board_state(model_id, text_candidate),
                             "verification": checked, "note": verification_note(checked, text_candidate)})
         _cache = {"service": "LuomoAPI Hub", "version": "2026.10-interchange-t001", "status": "operational" if db_ok and upstream_ok else "degraded", "updated_at": checked_at, "cache_seconds": 30,
                   "components": [{"name": "网关应用", "status": "operational", "detail": "当前 HTTP 请求已到达应用"}, {"name": "数据库", "status": "operational" if db_ok else "degraded", "detail": "只读查询成功" if db_ok else "查询失败"}, {"name": "AI 上游目录", "status": "operational" if upstream_ok else "degraded", "detail": reason, "latency_ms": latency}],

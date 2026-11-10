@@ -1,24 +1,27 @@
 {% extends "base.html" %}
-{% block title %}公共路由 · {{ app_name }}{% endblock %}
+{% block title %}公开路由 · {{ app_name }}{% endblock %}
 {% block content %}
-<div class="page-head"><div><p class="eyebrow">Branch lines · 公共路由</p><h1>公共路由</h1><p class="lead">业务接口经 <code>/api/public/v1/…</code> 对外开放。敏感上游在核对响应结构和 scope 之前保持停用。</p></div></div>
+<div class="page-head"><div><p class="eyebrow">Branch lines · 公开路由</p><h1>公开路由</h1><p class="lead">业务接口经 <code>/api/public/v1/…</code> 对外开放。新路由和复制出的路由默认停用，核对响应结构和 scope 后再启用。</p></div><div class="actions"><a class="btn" href="/apis">上游 API</a><a class="btn ghost" href="/tester">接口测试</a></div></div>
 <div class="card flush"><div class="table-wrap"><table>
-  <thead><tr><th>路由</th><th>上游</th><th>权限</th><th>文档 / 认证</th><th>状态</th><th>操作</th></tr></thead>
+  <thead><tr><th>路由</th><th>上游</th><th>权限</th><th>近 7 天</th><th>状态</th><th class="right">操作</th></tr></thead>
   <tbody>
   {% for route in routes %}
   <tr>
-    <td><span class="method {{ route.target_method|lower }}">{{ route.target_method }}</span> <strong>{{ route.name }}</strong><span class="sub mono">/api/public/v1/{{ route.public_path }}</span></td>
+    <td><span class="method {{ route.target_method|lower }}">{{ route.target_method }}</span> <strong>{{ route.name }}</strong><span class="sub mono">/api/public/v1/{{ route.public_path }}</span><span class="sub">{{ '文档可见' if route.public_docs else '文档隐藏' }} · {{ '匿名可用' if route.allow_anonymous else '需要 API Key' }}</span></td>
     <td>{{ route.api_name }}<span class="sub mono">{{ route.target_path }}</span></td>
     <td><code>{{ route.required_scope or '—' }}</code></td>
-    <td class="small">{{ '文档可见' if route.public_docs else '文档隐藏' }}<span class="sub">{{ '匿名可用' if route.allow_anonymous else '需要 API Key' }}</span></td>
+    <td class="num">{{ route.calls_7d }}<span class="sub">最近 {{ route.last_called_at|utc }}</span></td>
     <td><span class="badge {{ 'ok' if route.enabled else 'off' }}">{{ '已启用' if route.enabled else '已停用' }}</span></td>
-    <td><form method="post" action="/admin/routes/{{ route.id }}/toggle" {% if route.enabled %}data-confirm="停用后调用将返回 route_disabled，确定停用「{{ route.name }}」吗？"{% endif %}>
-      {% if route.enabled %}<input type="hidden" name="enabled" value="0"><button class="btn danger sm" type="submit">停用</button>
-      {% else %}<input type="hidden" name="enabled" value="1"><button class="btn primary sm" type="submit">启用</button>{% endif %}
-    </form></td>
+    <td><div class="cell-actions">
+      <a class="btn sm" href="/admin/routes/{{ route.id }}/edit">编辑</a>
+      <form method="post" action="/admin/routes/{{ route.id }}/toggle" {% if route.enabled %}data-confirm="停用后调用将返回 route_disabled，确定停用「{{ route.name }}」吗？"{% endif %}>
+        {% if route.enabled %}<input type="hidden" name="enabled" value="0"><button class="btn sm" type="submit">停用</button>
+        {% else %}<input type="hidden" name="enabled" value="1"><button class="btn primary sm" type="submit">启用</button>{% endif %}
+      </form>
+    </div></td>
   </tr>
   {% else %}
-  <tr><td colspan="6" class="empty">还没有公共路由。</td></tr>
+  <tr><td colspan="6" class="empty">还没有公开路由。展开下方“新增路由”创建第一条。</td></tr>
   {% endfor %}
   </tbody>
 </table></div></div>
@@ -28,11 +31,11 @@
   <div class="card-body">
     <form method="post" action="/admin/routes" class="form two">
       <label class="field">名称<input name="name" required></label>
-      <label class="field">公开路径<input name="public_path" class="mono" placeholder="luomocore/health" required><small>挂在 /api/public/v1/ 之下。</small></label>
+      <label class="field">公开路径<input name="public_path" class="mono" placeholder="luomocore/health" pattern="[a-z0-9._~\-]+(/[a-z0-9._~\-]+)*" required><small>挂在 /api/public/v1/ 之下；小写字母、数字和 . _ ~ -，用 / 分段。</small></label>
       <label class="field">上游 API<select name="target_api_id" required>{% for api in apis %}<option value="{{ api.id }}">{{ api.name }} · {{ api.base_url }}</option>{% endfor %}</select></label>
       <label class="field">方法<select name="target_method">{% for method in methods %}<option value="{{ method }}">{{ method }}</option>{% endfor %}</select></label>
-      <label class="field">上游路径<input name="target_path" class="mono" placeholder="/health" required></label>
-      <label class="field">所需权限（scope）<input name="required_scope" class="mono" placeholder="luomocore:health"></label>
+      <label class="field">上游路径<input name="target_path" class="mono" placeholder="/health" pattern="/.*" required><small>以 / 开头，不含协议和主机。</small></label>
+      <label class="field">所需权限（scope）<input name="required_scope" class="mono" placeholder="luomocore:health"><small>形如 name:action；匿名路由可留空。</small></label>
       <div class="wide checks"><label class="check"><input type="checkbox" name="enabled"> 立即启用</label><label class="check"><input type="checkbox" name="public_docs" checked> 在文档中显示</label><label class="check"><input type="checkbox" name="allow_anonymous"> 允许匿名访问</label></div>
       <div class="wide actions"><button class="btn primary" type="submit">新增路由</button><span class="muted small">新路由默认停用，核对后再启用。</span></div>
     </form>

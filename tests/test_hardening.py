@@ -99,7 +99,7 @@ class GatewayHardeningTests(unittest.TestCase):
                 self.assertIsNone(row["email_verification_token_hash"])
                 login = self.client.post("/login", data={"username": username, "password": password}, follow_redirects=False)
                 self.assertEqual(login.status_code, 401 if user_status in {"suspended", "disabled"} else 303)
-                self.client.cookies.set(SESSION_COOKIE, create_session(username))
+                self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username=username))
                 page = self.client.get("/developer", headers={"Accept": "application/json"})
                 self.assertEqual(page.status_code, 401 if user_status in {"suspended", "disabled"} else 200)
 
@@ -169,7 +169,7 @@ class GatewayHardeningTests(unittest.TestCase):
             user_id = cursor.lastrowid
             conn.commit()
         headers = {"Origin": "https://api.example.test"}
-        self.client.cookies.set(SESSION_COOKIE, create_session("status_admin"))
+        self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username="status_admin"))
         page = self.client.get("/admin/users")
         self.assertEqual(page.status_code, 200)
         self.assertNotIn('disabled>active</option>', page.text)
@@ -181,7 +181,7 @@ class GatewayHardeningTests(unittest.TestCase):
         invalid = self.client.post(f"/admin/users/{user_id}/status", data={"status_value": "invalid"}, headers=headers, follow_redirects=False)
         self.assertEqual(invalid.status_code, 400)
         self.client.cookies.clear()
-        self.client.cookies.set(SESSION_COOKIE, create_session("unverified_activation"))
+        self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username="unverified_activation"))
         forbidden = self.client.post(f"/admin/users/{user_id}/status", data={"status_value": "disabled"}, headers=headers, follow_redirects=False)
         self.assertEqual(forbidden.status_code, 403)
         with connect() as conn:
@@ -195,7 +195,7 @@ class GatewayHardeningTests(unittest.TestCase):
         self.assertFalse(claim_verification_send(email, source))
 
     def test_cookie_authenticated_post_rejects_cross_origin_source(self):
-        self.client.cookies.set(SESSION_COOKIE, create_session("csrf_test_user"))
+        self.client.cookies.set(SESSION_COOKIE, "opaque-csrf-fixture-cookie")
         try:
             response = self.client.post(
                 "/developer/resend-verification",
@@ -231,7 +231,7 @@ class GatewayHardeningTests(unittest.TestCase):
             )
             conn.commit()
             user_id = cursor.lastrowid
-        self.client.cookies.set(SESSION_COOKIE, create_session("resend_user"))
+        self.client.cookies.set(SESSION_COOKIE, create_session(user_id_or_username="resend_user"))
         with patch("app.main.send_verification_email", side_effect=RuntimeError("controlled SMTP failure")):
             response = self.client.post("/developer/resend-verification", headers={"origin": "https://api.example.test"}, follow_redirects=False)
         self.client.cookies.clear()

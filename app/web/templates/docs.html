@@ -8,12 +8,12 @@
     <p>入门</p>
     <a href="#quickstart">快速开始</a><a href="#authentication">认证与密钥</a>
     <p>AI 接口</p>
-    <a href="#ai">OpenAI 兼容接口</a><a href="#billing">积分与计费</a><a href="#errors">错误码</a>
+    <a href="#ai">OpenAI 兼容接口</a><a href="#images">图像输入</a><a href="#billing">积分与计费</a><a href="#errors">错误码</a>
     <p>业务接口</p>
     <a href="#endpoints">接口目录</a>
     <div class="route-links">{% for route in routes %}<a href="#endpoint-{{ route.id }}">{{ route.name }}</a>{% endfor %}</div>
     <p>账户</p>
-    <a href="/developer/keys">管理 API 密钥 ↗</a><a href="/pricing">价格表 ↗</a>
+    <a href="#account">登录与账户安全</a><a href="/developer/keys">管理 API 密钥 ↗</a><a href="/pricing">价格表 ↗</a>
   </nav>
 
   <article class="docs-body">
@@ -56,6 +56,22 @@
       <p class="section-note">支持文本与客户端函数工具；单次输出上限 128,000 token。未指定上限时，按你的可用积分自动放宽到最多 32,768（至少 2,048）；需要更长输出请显式设置 <code>max_tokens</code> / <code>max_output_tokens</code>。流式请求可加 <code>stream_options.include_usage</code> 获取最终用量。每个响应带 <code>X-Request-ID</code>，排查问题时请一并提供。模型用途与配置示例见 <a href="/models">模型线路</a>。</p>
     </section>
 
+    <section id="images">
+      <h2>图像输入</h2>
+      {% if image_input_enabled() %}
+      <p>在<a href="/models">模型线路</a>中标有“图像输入”的模型，可以在一次请求里附带图片：</p>
+      <ul>
+        <li>Chat Completions：<code>{"type": "image_url", "image_url": {"url": "https://…", "detail": "auto"}}</code></li>
+        <li>Responses：<code>{"type": "input_image", "image_url": "https://…"}</code></li>
+        <li>只接受 <code>https://</code> 链接或 <code>data:image/(png|jpeg|webp|gif);base64,…</code>；每次最多 16 张，每张 base64 解码后不超过 8 MB，整个请求体不超过 20 MB。</li>
+        <li>冻结时每张图按 8,000 输入 token 预估，结算以上游回报的实际 token 为准，多余部分退回。</li>
+      </ul>
+      {% else %}
+      <p>本站网关目前<strong>尚未开放</strong>图像输入，请求中带图片会返回 <code>400 billing_shape_unsupported</code>。开放后，标有“图像输入”的模型可以接收 https 或 base64 图片，按图像 token 计费。</p>
+      {% endif %}
+      <p class="muted small">文件、音频、图像生成和 web search 等内置工具仍未开放。</p>
+    </section>
+
     <section id="billing">
       <h2>积分与计费</h2>
       <p>生成调用按 OpenAI 官方 Standard 单价结算：<strong>¥1 = 100 积分</strong>，<strong>$1 = 720 积分</strong>，精确到六位小数。</p>
@@ -85,6 +101,16 @@
         </tbody>
       </table></div></div>
       <p class="section-note muted">流式连接建立后，错误也可能出现在 SSE 事件中；以最终事件和 <code>[DONE]</code> 判断是否完成。</p>
+    </section>
+
+    <section id="account">
+      <h2>登录与账户安全</h2>
+      <ul>
+        <li>网页登录 12 小时有效；退出登录后，这个会话会立即在服务端失效。</li>
+        <li>在 <a href="/account">账户与安全</a> 可以修改密码、查看登录设备并让其他设备退出。修改密码后，其他设备会自动退出。</li>
+        <li>忘记密码时，在登录页点“忘记密码”，通过邮件里的一次性链接（60 分钟内有效）重置；重置后所有设备都需要重新登录。</li>
+        <li>网页会话与 API 密钥相互独立：改密码不会让 API 密钥失效，需要时请在密钥页单独撤销。</li>
+      </ul>
     </section>
 
     <section id="endpoints" aria-label="业务接口目录">

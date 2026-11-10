@@ -3,16 +3,20 @@ import base64
 import hashlib
 import os
 import secrets
-import sqlite3
+import sys
+from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.utils.timefmt import now_iso as _now_iso
+from app.db import connect_database
+
+now_iso = partial(_now_iso, timespec="microseconds")
 
 
 DB_PATH = os.getenv("DATABASE_PATH", "data/luomoapi.db")
 
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
 
 
 def hash_key(api_key: str) -> str:
@@ -35,9 +39,7 @@ def connect():
     if not Path(DB_PATH).exists():
         raise SystemExit(f"Database not found: {DB_PATH}")
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return connect_database(DB_PATH, require_exists=True)
 
 
 def main():

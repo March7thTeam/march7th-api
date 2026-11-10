@@ -66,6 +66,10 @@ def send_verification_email(email: str, username: str, token: str) -> None:
         )
     )
 
+    send_message(message)
+
+
+def send_message(message: EmailMessage) -> None:
     if settings.smtp_use_tls:
         with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
             smtp.login(settings.smtp_username, settings.smtp_password)
@@ -84,6 +88,12 @@ def new_token_record() -> tuple[str, str, str]:
 
 def claim_verification_send(email: str, source_ip: str | None) -> bool:
     """Atomically cap sends per recipient and per observed client address."""
+    return claim_email_send(email, source_ip, table="verification_email_limits")
+
+
+def claim_email_send(email: str, source_ip: str | None, *, table: str) -> bool:
+    if table not in {"verification_email_limits", "password_reset_limits"}:
+        raise ValueError("Unknown email limiter.")
     now_dt = datetime.now(timezone.utc)
     now = now_iso()
     identities = [("email", email.strip().lower(), 5, 60)]
@@ -98,7 +108,7 @@ def claim_verification_send(email: str, source_ip: str | None) -> bool:
         current = []
         for bucket_hash, limit, cooldown in buckets:
             row = conn.execute(
-                "SELECT window_started_at, last_sent_at, send_count FROM verification_email_limits WHERE bucket_hash=?",
+                f"SELECT window_started_at, last_sent_at, send_count FROM {table} WHERE bucket_hash=?",
                 (bucket_hash,),
             ).fetchone()
             if row:
@@ -120,14 +130,26 @@ def claim_verification_send(email: str, source_ip: str | None) -> bool:
         for bucket_hash, _, started, count in current:
             if started is None or now_dt - started >= timedelta(hours=1):
                 conn.execute(
-                    "INSERT INTO verification_email_limits(bucket_hash, window_started_at, last_sent_at, send_count) VALUES (?, ?, ?, 1) "
+                    f"INSERT INTO {table}(bucket_hash, window_started_at, last_sent_at, send_count) VALUES (?, ?, ?, 1) "
                     "ON CONFLICT(bucket_hash) DO UPDATE SET window_started_at=excluded.window_started_at, last_sent_at=excluded.last_sent_at, send_count=1",
                     (bucket_hash, now, now),
                 )
             else:
                 conn.execute(
-                    "UPDATE verification_email_limits SET last_sent_at=?, send_count=? WHERE bucket_hash=?",
+                    f"UPDATE {table} SET last_sent_at=?, send_count=? WHERE bucket_hash=?",
                     (now, count + 1, bucket_hash),
                 )
         conn.commit()
     return True
+
+
+def send_password_reset_email(email: str, username: str, token: str) -> None:
+    if not smtp_configured():
+        raise RuntimeError("SMTP is not configured.")
+    link = f"{settings.app_base_url}/reset-password?{urlencode({'token': token})}"
+    message = EmailMessage()
+    message["Subject"] = f"重置你的 {settings.app_name} 密码"
+    message["From"] = settings.smtp_from
+    message["To"] = email
+    message.set_content(f"{username}，你好：\n\n请打开以下链接重置密码（60 分钟内有效，仅可使用一次）：\n{link}\n\n如果不是你发起的请求，请忽略此邮件。")
+    send_message(message)

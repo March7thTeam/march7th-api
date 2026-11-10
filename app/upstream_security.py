@@ -28,7 +28,7 @@ def _is_public(value: str) -> bool:
     )
 
 
-def resolve_and_pin_target(url: str) -> PinnedTarget:
+def validate_https_url(url: str):
     try:
         parsed = urlsplit(url)
         host = parsed.hostname
@@ -38,12 +38,21 @@ def resolve_and_pin_target(url: str) -> PinnedTarget:
         raise ValueError("Malformed HTTPS upstream URL.") from exc
     if parsed.scheme.lower() != "https":
         raise ValueError("Only HTTPS upstream targets are allowed.")
-    if parsed.username or parsed.password:
+    if parsed.username is not None or parsed.password is not None:
         raise ValueError("Upstream URL credentials are not allowed.")
     if not host:
         raise ValueError("Upstream URL host is missing.")
     if not 1 <= port <= 65535:
         raise ValueError("Upstream URL port is invalid.")
+
+    return parsed
+
+
+def resolve_and_pin_target(url: str) -> PinnedTarget:
+    parsed = validate_https_url(url)
+    host = parsed.hostname
+    explicit_port = parsed.port
+    port = explicit_port if explicit_port is not None else 443
 
     try:
         literal = ip_address(host)
