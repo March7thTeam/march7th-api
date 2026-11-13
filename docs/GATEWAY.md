@@ -122,16 +122,16 @@ Responses 使用 `input[].content[]` 中的 `{"type":"input_image","image_url":"
 ## Optional native Responses transport
 
 `GATEWAY_NATIVE_RESPONSES=true` with the server-only `GATEWAY_NATIVE_RESPONSES_API_KEY`
-sends `POST /v1/responses` to the fixed `https://api.openai.com/v1/responses` only for
-these exact model IDs: `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
-`gpt-6.1-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`. This applies with or
-without tools. Other models, including `gpt-4o-mini`, keep their existing CodexProxy
-route so dated upstream snapshots do not introduce new exact-model billing failures.
-No model-prefix normalization or receipt-model rewriting occurs.
-With the flag off, all Responses models use the existing CodexProxy path. Enabling
-native routing without its key returns503 only for the eight selected models,
-before any usage/credit reservation or dispatch. It never silently falls back for
-a selected native model. Chat Completions stays on CodexProxy, and image
+sends `POST /v1/responses` to the fixed `https://api.openai.com/v1/responses` for the22
+reviewed text model IDs in `app/text_model_capabilities.json`. This covers the former
+8-model routing set plus the14 price-equivalent canonical aliases. Requests keep
+`max_output_tokens`, reasoning and function schemas; they are not converted to Chat.
+Unregistered legacy/Pro/unknown models retain the old proxy path. Flag off keeps all
+old routing. With the flag on, an eligible model with no native key returns503 before
+reservation/dispatch; no silent fallback occurs. The catalog merges configured
+native models even when the proxy listing is empty or unavailable, while retaining
+its real proxy health and never claiming an unperformed generation test.
+Chat Completions stays on CodexProxy, and image
 flags/credentials remain independent. Fresh authorization/content-type/accept
 headers prevent caller provider headers from affecting the official request.
 
@@ -140,7 +140,7 @@ reservation/send boundary, JSON/SSE relay, usage parsing and reconciliation rema
 shared. `max_output_tokens`, `reasoning`, function schemas and tool choices are
 preserved. No Chat-to-Responses translation or automatic reasoning downgrade occurs.
 GPT-6 Astra, GPT-6.1 Sol and GPT-6.1 Terra function-tool callers should choose
-Responses in their client; Astra does not support reasoning `none`. Existing model
+Responses in their client; the gateway does not recommend disabling reasoning. Existing model
 availability, whitelist and official-price requirements still apply.
 
 Only the verified Chat pre-generation compatibility error (HTTP400,
@@ -160,3 +160,45 @@ unknown dates, cross-model snapshots, reverse mappings and changed prices still
 require reconciliation. The metadata records official model/pricing sources and
 retrieval dates. This does not add model grants or priced SKUs, rewrite responses,
 alter image billing, or automatically settle historical holds.
+
+
+## Output limits and contract verification
+
+`text_model_capabilities.json` is the single reviewed source for native eligibility,
+model output maxima and official documentation URLs. Automatic output reservations
+use the existing32768/16384/8192/4096/2048 tiers constrained by that model's maximum,
+then choose the largest affordable tier. GPT4o/4o-mini cap at16384, GPT4.1/4.1-mini
+at32768, o3 at100000, and the reviewed GPT5/GPT6 models at128000. Unknown legacy
+models default conservatively to2048 while retaining the old128000 explicit-limit
+boundary. Explicit limits above a known maximum return400 before reservation or
+sending; legal explicit values are preserved. Admin-exempt calls share this output
+validation and defaulting but still skip credit reservation/charging and retain their
+other existing request parameters.
+
+A known Chat tool/reasoning compatibility error is rewritten for the caller only
+after its original provider body passes strict pre-generation release checks. It
+instructs clients to use native Responses while preserving reasoning/tools. Unknown
+errors and evidence-bearing bodies are not relabeled as zero-cost rejections. The
+exact429 insufficient_quota/credit_balance_exhausted error also releases only when
+all generation/usage fields are absent, including empty or nested ones.
+
+Model verification keeps historical text `protocols`/`checked_at` separate from
+`tool_protocols`/`tools_checked_at`. No new paid verification is inferred from a
+catalog listing or a text-only result. `python -m scripts.issue8_contract_probe
+--base-url http://127.0.0.1:8790 --ledger-db /app/data/issue8-candidate.sqlite
+--output /tmp/issue8-results.json` uses `LUOMO_API_KEY` from the environment without
+printing it. It makes real billable requests when run: Responses functions in JSON
+and SSE for gpt5.2/gpt5.5 by default, one non-streaming Chat tools probe, and gpt4o-mini Chat
+and Responses requests with no explicit output limit (seven requests by default).
+The Chat probe reports `supported_200` only for valid Chat function calls with
+verified model identity and usage, or `guided_rejection_400` for the known structured
+Responses guidance without usage/output evidence. With ledger auditing, success
+requires settled holds and equal expected/charged/actual units; rejection requires
+released holds and zero charged/actual units. This single probe does not add a Chat
+SSE check or a complete Chat tool-verification record.
+The4.1/4.1-mini/4o/4o-mini tool cases omit reasoning; the other reviewed models use
+reasoning.low. External credit/quota/auth blockers appear as environment_blocked
+reasons and still fail acceptance; they never become success verification records. Optional ledger auditing opens only a named isolated DB
+read-only. JSON contains per-case request IDs/status, protocol, usage, tool outcome,
+ledger status/expected charge/output bound and proposed tool-verification records;
+exit0 means every case passed. The script never edits public verification records.

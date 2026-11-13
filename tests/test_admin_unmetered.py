@@ -137,12 +137,14 @@ class AdminUnmeteredTests(unittest.TestCase):
                     self.assert_exempt_audit()
                     self.assertEqual(self.money_state(), before)
 
-    def test_exempt_requests_do_not_invent_output_or_processing_limits(self):
+    def test_exempt_requests_use_safe_output_default_without_processing_changes(self):
         self.configure()
         for protocol in ("chat", "responses"):
             payload = {"model": UNKNOWN_MODEL, "messages": []} if protocol == "chat" else {"model": UNKNOWN_MODEL, "input": "x"}
             self.assertEqual(self.post(protocol, payload).status_code, 200)
-            self.assertEqual(self.calls[-1]["body"], payload)
+            field = "max_completion_tokens" if protocol == "chat" else "max_output_tokens"
+            self.assertEqual(self.calls[-1]["body"], {**payload, field: 2048})
+            self.assertEqual(self.money_state()['credit_holds'], [])
 
     def test_models_all_and_allowlist_endpoint_grants_still_apply(self):
         self.configure()

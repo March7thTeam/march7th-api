@@ -53,10 +53,10 @@
           <tr><td><code>POST /v1/responses</code></td><td>Responses 协议，支持 SSE；不支持远端会话检索</td><td><code>responses:create</code></td></tr>
         </tbody>
       </table></div></div>
-      <p class="section-note">支持文本与客户端函数工具；单次输出上限 128,000 token。未指定上限时，按你的可用积分自动放宽到最多 32,768（至少 2,048）；需要更长输出请显式设置 <code>max_tokens</code> / <code>max_output_tokens</code>。流式请求可加 <code>stream_options.include_usage</code> 获取最终用量。每个响应带 <code>X-Request-ID</code>，排查问题时请一并提供。模型用途与配置示例见 <a href="/models">模型线路</a>。</p>
+      <p class="section-note">支持文本与客户端函数工具；输出上限依模型而定：4o / 4o-mini 为 16,384，4.1 / 4.1-mini 为 32,768，o3 为 100,000，已列出的 GPT5 / GPT6 为 128,000 token。未指定上限时，按模型能力与可用积分选择最多 32,768 的预算；未知旧型号缺省 2,048。超过模型上限的显式值会在发送前返回 400；需要更长且模型支持时请显式设置 <code>max_tokens</code> / <code>max_output_tokens</code>。流式请求可加 <code>stream_options.include_usage</code> 获取最终用量。每个响应带 <code>X-Request-ID</code>，排查问题时请一并提供。模型用途与配置示例见 <a href="/models">模型线路</a>。</p>
     </section>
 
-    <p class="section-note">GPT-6 Astra、GPT-6.1 Sol 与 GPT-6.1 Terra 的函数工具请使用 <code>/v1/responses</code>，并按 Responses 格式传递 <code>reasoning</code>、<code>tools</code> 与 <code>max_output_tokens</code>。Astra 不支持把推理设为 <code>none</code>；旧 Chat 客户端需要切换协议，网关不会静默删除工具或降低推理。模型能否调用仍受密钥白名单和已计价型号限制。</p>
+    <p class="section-note">GPT-6 Astra、GPT-6.1 Sol 与 GPT-6.1 Terra 的函数工具请使用 <code>/v1/responses</code>，并按 Responses 格式传递 <code>reasoning</code>、<code>tools</code> 与 <code>max_output_tokens</code>。旧 Chat 客户端需要切换协议，网关不会静默删除工具或降低推理。模型能否调用仍受密钥白名单和已计价型号限制。</p>
 
     <section id="images">
       <h2>图像输入</h2>

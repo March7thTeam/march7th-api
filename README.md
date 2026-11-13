@@ -229,3 +229,12 @@ python -m unittest discover -s tests
 图像调用复用原有账户、模型白名单、配额、积分冻结与失败恢复流程，价格使用
 独立 `app/image_generation_prices.json` 版本。登录 `/developer/images` 可预览下载，
 参数、计费与服务端 SDK 示例见 [图像生成说明](docs/IMAGE_GENERATION.md)。
+
+
+### Responses 工具与输出预算
+
+开启原生 Responses 后，`app/text_model_capabilities.json` 中22个明确型号直接走
+官方 Responses，保留工具、推理和 `max_output_tokens`。同一能力表限制自动与显式
+输出预算：4o-mini 不会再默认请求32768；超上限显式值会在派发前400。
+工具验证与纯文本历史验证分开显示。可运行 `scripts/issue8_contract_probe.py`
+执行真实契约验收，具体环境变量、隔离账本和JSON输出见 `docs/GATEWAY.md`。
