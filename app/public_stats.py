@@ -1,20 +1,22 @@
 from datetime import datetime, timedelta, timezone
 from contextlib import closing
 from typing import Any
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.ai_catalog import snapshot
 from app.auth import optional_user
 from app.config import settings
 from app.db import connect
-from app.web.templating import templates
+from app.web.templating import STATIC_DIR, templates
 
 
 router = APIRouter()
 EMPTY_STATS = {"enabled_routes": 0, "disabled_routes": 0, "documented_routes": 0}
+PUBLIC_PAGE_PATHS = ("/", "/docs", "/models", "/pricing", "/status")
 
 
 def get_public_route_stats() -> dict[str, int]:
@@ -63,6 +65,44 @@ def public_routes_api():
 @router.get("/security", response_class=PlainTextResponse)
 def security_policy():
     return security_text()
+
+
+@router.api_route("/robots.txt", methods=["GET", "HEAD"], response_class=PlainTextResponse)
+def robots_txt():
+    rules = ["User-agent: *", "Disallow: /"]
+    rules.extend(f"Allow: {path}$" for path in PUBLIC_PAGE_PATHS)
+    rules.extend([
+        "Allow: /static/",
+        "Allow: /favicon.ico$",
+        "Allow: /sitemap.xml$",
+        "Allow: /security$",
+        "Allow: /.well-known/security.txt$",
+        f"Sitemap: {settings.app_base_url}/sitemap.xml",
+        "",
+    ])
+    return "\n".join(rules)
+
+
+@router.api_route("/sitemap.xml", methods=["GET", "HEAD"])
+def sitemap_xml():
+    urls = "\n".join(
+        f"  <url><loc>{escape(settings.app_base_url + path)}</loc></url>" for path in PUBLIC_PAGE_PATHS
+    )
+    return Response(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n</urlset>\n",
+        media_type="application/xml",
+    )
+
+
+@router.api_route("/favicon.ico", methods=["GET", "HEAD"], response_class=FileResponse)
+def favicon():
+    return FileResponse(
+        STATIC_DIR / "favicon.ico",
+        media_type="image/vnd.microsoft.icon",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/.well-known/security.txt", response_class=PlainTextResponse)

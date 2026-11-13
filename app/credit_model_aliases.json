@@ -1,0 +1,80 @@
+{
+  "version": "openai-price-equivalent-snapshots-2026-11-13-v1",
+  "snapshot_retrieved_at": "2026-11-13",
+  "price_version": "openai-standard-2026-10-09",
+  "pricing_source": "https://developers.openai.com/api/docs/pricing",
+  "pricing_retrieved_at": "2026-10-09",
+  "card_hash_format": "SHA256 of json.dumps(card, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode('utf-8')",
+  "models": {
+    "gpt-4.1": {
+      "snapshot": "gpt-4.1-2025-04-14",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "price_card_sha256": "afc5f3f284accc7a63cf9f23e5ce89616fde6df860da19253ce4c326d9877663"
+    },
+    "gpt-4.1-mini": {
+      "snapshot": "gpt-4.1-mini-2025-04-14",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+      "price_card_sha256": "d1b4fe195a085b3140bdb7da675167918958bdbcf0c468695d8d5a7d689cec1b"
+    },
+    "gpt-4o": {
+      "snapshot": "gpt-4o-2024-08-06",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-4o",
+      "price_card_sha256": "a17e891a43741dad77103ccdc164e074d6f20d89d8565b2004331f4a1021108b"
+    },
+    "gpt-4o-mini": {
+      "snapshot": "gpt-4o-mini-2024-07-18",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
+      "price_card_sha256": "b751d8637dc7a6de92b299579fbd049b92041aae25bc09ba2a3f7a6a542aca7c"
+    },
+    "gpt-5": {
+      "snapshot": "gpt-5-2025-08-07",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5",
+      "price_card_sha256": "6938fc8d38d75200a2f0bef890b584f461158aa5abbcabfa525d251cba0a36da"
+    },
+    "gpt-5-mini": {
+      "snapshot": "gpt-5-mini-2025-08-07",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5-mini",
+      "price_card_sha256": "b595d1aa9e898d9afc9a73213a60cc2b701134d3e4ac97c66196a12abee3deca"
+    },
+    "gpt-5-nano": {
+      "snapshot": "gpt-5-nano-2025-08-07",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5-nano",
+      "price_card_sha256": "7debf2d3ec18b492f1f10455b17020811d108a216de29fb0f2bd3bd652dea3b2"
+    },
+    "gpt-5.1": {
+      "snapshot": "gpt-5.1-2025-11-13",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5.1",
+      "price_card_sha256": "6938fc8d38d75200a2f0bef890b584f461158aa5abbcabfa525d251cba0a36da"
+    },
+    "gpt-5.2": {
+      "snapshot": "gpt-5.2-2025-12-11",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5.2",
+      "price_card_sha256": "408af62ad5115e6ebb819f28802c943e839517211b673f7bad65656b87542a8f"
+    },
+    "gpt-5.4": {
+      "snapshot": "gpt-5.4-2026-03-05",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "price_card_sha256": "b827a41bf79dff1826e72984907bd6e3e4a28f38896fe8401f5eeb7572996875"
+    },
+    "gpt-5.4-mini": {
+      "snapshot": "gpt-5.4-mini-2026-03-17",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+      "price_card_sha256": "5c1403db0cb44b0800d416b741c16bc27133a7eed91323d6fd7ad7a2ae5bb7e8"
+    },
+    "gpt-5.4-nano": {
+      "snapshot": "gpt-5.4-nano-2026-03-17",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+      "price_card_sha256": "7d214ccf6bd4ddd98e613ca55b9e33ebc44258f74ca2109adb734dbb50246aee"
+    },
+    "gpt-5.5": {
+      "snapshot": "gpt-5.5-2026-04-23",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+      "price_card_sha256": "1ab5db0266a9c448b5d80302f8badde4d4f705a31c3dfbebf323c25071cd11a3"
+    },
+    "o3": {
+      "snapshot": "o3-2025-04-16",
+      "snapshot_source": "https://developers.openai.com/api/docs/models/o3",
+      "price_card_sha256": "afc5f3f284accc7a63cf9f23e5ce89616fde6df860da19253ce4c326d9877663"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from app.ai_catalog import snapshot
 from app.auth import optional_user, require_developer, require_admin
@@ -41,14 +41,14 @@ def _page_days(value: str | None) -> int:
 def usage_page(request: Request, user=Depends(require_developer), days: str | None = None):
     span = _page_days(days)
     window = usage_window(span)
-    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(user["id"], window=window), "all_users": False, "analytics": usage_analytics(user["id"], span, window=window, protocols=("chat.completions", "responses"))})
+    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(user["id"], window=window), "all_users": False, "analytics": usage_analytics(user["id"], span, window=window, protocols=("chat.completions", "responses", "images.generations"))})
 
 
 @router.get("/admin/ai-usage", response_class=HTMLResponse)
 def admin_usage(request: Request, user=Depends(require_admin), days: str | None = None):
     span = _page_days(days)
     window = usage_window(span)
-    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(None, window=window), "all_users": True, "analytics": usage_analytics(None, span, window=window, protocols=("chat.completions", "responses"))})
+    return templates.TemplateResponse(request, "ai_usage.html", {"user": user, "usage": read_usage_summary(None, window=window), "all_users": True, "analytics": usage_analytics(None, span, window=window, protocols=("chat.completions", "responses", "images.generations"))})
 
 
 @router.get("/api/developer/usage")
@@ -60,6 +60,47 @@ def usage_api(user=Depends(require_developer)):
 async def playground(request: Request, user=Depends(require_developer)):
     from app.image_input import image_input_enabled
     return templates.TemplateResponse(request, "ai_playground.html", {"user": user, "catalog": await snapshot(), "keys": key_views(user["id"]), "image_input": image_input_enabled()})
+
+
+@router.get("/developer/images", response_class=HTMLResponse)
+async def image_playground(request: Request, user=Depends(require_developer)):
+    from app.image_generation import image_generation_available
+    return templates.TemplateResponse(request, "ai_images.html", {"user": user, "keys": key_views(user["id"]),
+        "image_generation_enabled": image_generation_available()})
+
+
+@router.post("/developer/images/download")
+async def image_download(request: Request, user=Depends(require_developer)):
+    """Return only the logged-in caller's submitted PNG as an HTTP attachment.
+
+    No provider request, image cache, file lookup or billing operation occurs.
+    The existing session middleware enforces same-origin form submission.
+    """
+    import base64
+    from urllib.parse import parse_qsl
+    from app.cliproxy_gateway import read_bounded_body
+    from app.image_generation import IMAGE_SIZES, valid_image_response
+
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+        raise HTTPException(415, "请使用本站图片下载表单。")
+    try:
+        body = await read_bounded_body(request, max_bytes=20 * 1024 * 1024)
+        fields = parse_qsl(body.decode("ascii"), keep_blank_values=True, strict_parsing=True,
+                           encoding="utf-8", errors="strict", max_num_fields=2)
+        if len(fields) != 2 or {name for name, _ in fields} != {"b64_json", "size"}:
+            raise ValueError("Unexpected download fields")
+        values = dict(fields)
+        if values["size"] not in IMAGE_SIZES or not valid_image_response(
+                {"data": [{"b64_json": values["b64_json"]}]}, expected_size=values["size"]):
+            raise ValueError("Invalid PNG")
+        image = base64.b64decode(values["b64_json"], validate=True)
+    except (ValueError, UnicodeError) as exc:
+        if str(exc) == "request_too_large":
+            raise HTTPException(413, "图片下载表单超过20MiB上限。") from None
+        raise HTTPException(400, "图片下载内容无效，请重新生成后下载。") from None
+    return Response(image, media_type="image/png", headers={
+        "Content-Disposition": 'attachment; filename="generated.png"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/admin/ai-keys/{key_id}", response_class=HTMLResponse)

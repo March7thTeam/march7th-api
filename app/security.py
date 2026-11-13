@@ -1,5 +1,5 @@
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from urllib.parse import urlsplit
 from app.config import settings
 
@@ -16,6 +16,11 @@ async def security_headers(request: Request, call_next):
         if origin not in allowed or request.headers.get("sec-fetch-site") == "cross-site":
             return JSONResponse({"detail": "页面来源校验失败，请返回本站页面重试。"}, status_code=403)
     response = await call_next(request)
+    apply_security_headers(request, response)
+    return response
+
+
+def apply_security_headers(request: Request, response: Response) -> None:
     private_page = request.url.path.startswith(("/developer", "/admin", "/api/developer", "/api/admin", "/account"))
     if private_page or (request.cookies.get("luomoapi_session") and not request.url.path.startswith("/static/")):
         response.headers["Cache-Control"] = "no-store"
@@ -35,4 +40,3 @@ async def security_headers(request: Request, call_next):
     scripts = "'self' https://static.cloudflareinsights.com" if public_info else "'self'"
     connections = "'self' https://cloudflareinsights.com" if public_info else "'self'"
     response.headers["Content-Security-Policy"] = f"default-src 'self'; script-src {scripts}; style-src 'self'; img-src 'self' data:; connect-src {connections}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-    return response

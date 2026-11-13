@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% set error_title = {403: '没有访问权限', 404: '找不到这个页面'}.get(status_code, '服务暂不可用') %}
+{% block title %}{{ status_code }} · {{ error_title }} · {{ app_name }}{% endblock %}
+{% block page %}
+<div class="page-head">
+  <div><p class="eyebrow">HTTP {{ status_code }}</p><h1>{{ error_title }}</h1></div>
+  <div class="actions"><a class="btn primary" href="/">返回首页</a><a class="btn" href="/status">服务状态</a></div>
+</div>
+{% endblock %}

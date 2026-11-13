@@ -17,7 +17,7 @@ from app.config import settings
 from app.db import connect, init_db
 from app.http_clients import create_http_client
 from app.security import security_headers
-from app.error_redirect import error_redirect_middleware
+from app.error_pages import error_page_middleware, is_api_path
 from app.self_service_keys import init_self_key_schema
 from app.login_throttle import init_login_throttle_schema
 from app.credit_payments import initialize_payment_schema, payment_context
@@ -74,7 +74,7 @@ def _browser_form_submission(request: Request) -> bool:
     """A console form posted by a browser navigation; API clients and fetch() keep JSON errors."""
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return False
-    if request.url.path.startswith(("/v1/", "/api/")) or request.url.path in {"/v1", "/api"}:
+    if is_api_path(request.url.path):
         return False
     return "text/html" in request.headers.get("accept", "").lower()
 
@@ -127,13 +127,13 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None, lifespan=lifespan)
+    application = FastAPI(title=settings.app_name, openapi_url=None, docs_url=None, redoc_url=None, lifespan=lifespan)
     register_routers(application)
     application.add_exception_handler(StarletteHTTPException, form_http_error)
     application.add_exception_handler(RequestValidationError, form_validation_error)
     application.mount("/static", CachedStaticFiles(directory=str(STATIC_DIR)), name="static")
     application.middleware("http")(security_headers)
-    application.middleware("http")(error_redirect_middleware)
+    application.middleware("http")(error_page_middleware)
     application.middleware("http")(restrict_codexproxy_hostname)
     application.middleware("http")(redirect_api_http_to_https)
     application.middleware("http")(trust_forwarded_https)

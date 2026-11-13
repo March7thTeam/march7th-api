@@ -1,6 +1,6 @@
 """Private OpenAI-compatible CodexProxy gateway.
 
-Only the three text endpoints are exposed.  Authentication and quota
+Only explicitly supported model, text and image endpoints are exposed.  Authentication and quota
 reservation happen in short SQLite transactions; upstream network I/O always
 runs after those connections have been closed.
 """
@@ -31,6 +31,8 @@ from app.admin_key_policy import AdminKeyPolicyError, admin_unmetered
 from app.credit_pricing import (AUTO_OUTPUT_TIERS, DEFAULT_OUTPUT_TOKENS, PricingError, billing_details, billing_receipt_present,
                                 output_limit_requested, prepare_billable_request)
 from app.credit_ledger import recover_stale_usage, wallet_snapshot
+from app.image_generation import (IMAGE_ENDPOINT, IMAGE_UPSTREAM_URL, image_generation_enabled,
+                                  image_generation_available, prepare_image_request, valid_image_response)
 
 from app.ai_usage import (
     SSEUsageParser,
@@ -69,20 +71,30 @@ NEW_SCOPES = {
     "/v1/models": "models:read",
     "/v1/chat/completions": "chat:completions",
     "/v1/responses": "responses:create",
+    IMAGE_ENDPOINT: "images:generate",
 }
 ENDPOINT_PROTOCOLS = {
     "/v1/models": "models",
     "/v1/chat/completions": "chat.completions",
     "/v1/responses": "responses",
+    IMAGE_ENDPOINT: "images.generations",
 }
 ENDPOINT_METHODS = {
     "/v1/models": "GET",
     "/v1/chat/completions": "POST",
     "/v1/responses": "POST",
+    IMAGE_ENDPOINT: "POST",
 }
 ALLOWED_GATEWAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 STREAM_USAGE_GRACE_SECONDS = 5.0
 STREAM_USAGE_GRACE_BYTES = 1024 * 1024
+NATIVE_RESPONSES_URL = "https://api.openai.com/v1/responses"
+# Preserve older proxy aliases and exact billing-model matching. Native routing
+# is an explicit compatibility path, not a migration of every Responses model.
+NATIVE_RESPONSES_MODELS = frozenset({
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra",
+    "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+})
 
 
 class MeteredStreamingResponse(StreamingResponse):
@@ -120,16 +132,33 @@ PREGENERATION_ERROR_CODES = {400: {"context_length_exceeded"}, 401: {"invalid_ap
 PROXY_AUTH_UNAVAILABLE_STATUSES = {401, 503}
 
 
-def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str) -> bool:
+def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str, *, request_model: str | None = None) -> bool:
     """Only specific, structured pre-generation errors can release a hold."""
     if not isinstance(payload, dict) or billing_receipt_present(payload, protocol=protocol):
         return False
-    if any(payload.get(key) for key in ("choices", "output", "response", "content")):
+    if any(payload.get(key) for key in ("choices", "output", "response", "content", "data")):
         return False
     error = payload.get("error")
     if not isinstance(error, dict):
         return False
     code, message = error.get("code"), error.get("message")
+    if (status_code == 400 and protocol == "chat.completions" and error.get("type") == "invalid_request_error"
+            and isinstance(request_model, str) and request_model and message == (
+                f"Function tools with reasoning_effort are not supported for {request_model} in /v1/chat/completions. "
+                "To use function tools, use /v1/responses or set reasoning_effort to 'none'.")):
+        # This exact compatibility error is raised before generation. Unlike
+        # older provider codes, require generation fields to be entirely absent
+        # (even null/empty/nested) before releasing a dispatched reservation.
+        pending = [payload]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if set(value) & {"usage", "choices", "output", "response", "content", "data"}:
+                    return False
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+        return True
     if isinstance(code, str) and code in PREGENERATION_ERROR_CODES.get(status_code, set()):
         return True
     return status_code in PROXY_AUTH_UNAVAILABLE_STATUSES and (
@@ -175,7 +204,7 @@ def route_is_authorized(key_row: Any) -> bool:
 def endpoint_is_authorized(key_row: Any, path: str) -> bool:
     # Wildcard scopes intentionally do not grant this private API.  New keys
     # receive one precise scope per endpoint and need no legacy route entry.
-    return route_is_authorized(key_row) or has_exact_scope(key_row, NEW_SCOPES[path])
+    return (path != IMAGE_ENDPOINT and route_is_authorized(key_row)) or has_exact_scope(key_row, NEW_SCOPES[path])
 
 
 def _load_authorization(raw_key: str | None, endpoint: str, *, user_id: int | None = None, key_id: int | None = None) -> tuple[dict[str, Any] | None, set[str] | None, tuple[int, str, str | None] | None]:
@@ -598,7 +627,7 @@ async def cliproxy_gateway(proxy_path: str, request: Request):
     request_id = _request_id(request)
     path = "/v1/" + proxy_path
     endpoint = path if path in NEW_SCOPES else None
-    if endpoint is None:
+    if endpoint is None or (endpoint == IMAGE_ENDPOINT and not image_generation_enabled()):
         return json_error(404, "invalid_request_error", "Unknown or disabled endpoint.", request_id=request_id, code="endpoint_not_found")
     expected_method = ENDPOINT_METHODS[endpoint]
     if request.method.upper() != expected_method:
@@ -615,6 +644,8 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
                           session_user=None, key_id: int | None = None, provided_payload: dict | None = None):
     """One admission, quote, reservation, transport and settlement path for both entry points."""
     request_id = _request_id(request)
+    if endpoint == IMAGE_ENDPOINT and not image_generation_enabled():
+        return json_error(404, "invalid_request_error", "Unknown or disabled endpoint.", request_id=request_id, code="endpoint_not_found")
     expected_method = ENDPOINT_METHODS[endpoint]
     key_row: dict[str, Any] | None = None
     allowed_ids: set[str] | None = None
@@ -658,7 +689,11 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
             if key_row["admin_unmetered"] != expected_admin_unmetered:
                 return json_error(403, "permission_error", "API key authorization changed; retry the request.", request_id=request_id, code="authorization_changed")
             try:
-                if not expected_admin_unmetered:
+                if endpoint == IMAGE_ENDPOINT:
+                    # Unmetered administrators still share the strict shape boundary.
+                    payload, image_quote = prepare_image_request(payload)
+                    billing_quote = None if expected_admin_unmetered else image_quote
+                elif not expected_admin_unmetered:
                     billing_protocol = ENDPOINT_PROTOCOLS[endpoint]
                     default_limit = DEFAULT_OUTPUT_TOKENS
                     if not output_limit_requested(payload, protocol=billing_protocol):
@@ -672,13 +707,21 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
                 body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
             except PricingError as exc:
                 return json_error(400, "invalid_request_error", exc.message, request_id=request_id, code=exc.code)
-        upstream_key = _upstream_key()
+        native_responses = (endpoint == "/v1/responses" and payload["model"] in NATIVE_RESPONSES_MODELS
+                            and os.getenv("GATEWAY_NATIVE_RESPONSES", "false").strip().lower() == "true")
+        if endpoint == IMAGE_ENDPOINT:
+            upstream_key = os.getenv("GATEWAY_IMAGE_API_KEY", "").strip()
+        elif native_responses:
+            upstream_key = os.getenv("GATEWAY_NATIVE_RESPONSES_API_KEY", "").strip()
+        else:
+            upstream_key = _upstream_key()
         if not upstream_key:
-            return json_error(503, "server_error", "CodexProxy upstream is not configured.", request_id=request_id, code="upstream_unconfigured")
+            return json_error(503, "server_error", "The generation upstream is not configured.", request_id=request_id, code="upstream_unconfigured")
 
         protocol = ENDPOINT_PROTOCOLS[endpoint]
         streamed_request = bool(payload and payload.get("stream") is True)
-        target_url = _upstream_url(endpoint)
+        target_url = (IMAGE_UPSTREAM_URL if endpoint == IMAGE_ENDPOINT else
+                      NATIVE_RESPONSES_URL if native_responses else _upstream_url(endpoint))
         reservation, rejection = await run_in_threadpool(
             _reserve_gateway_usage,
             key_row,
@@ -716,9 +759,12 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
             upstream_request = client.build_request(
                 expected_method,
                 target_url,
-                headers=request_headers(request, upstream_key),
+                headers=({"authorization": "Bearer " + upstream_key, "content-type": "application/json",
+                          "accept": "text/event-stream" if native_responses and streamed_request else "application/json",
+                          "accept-encoding": "identity"}
+                         if endpoint == IMAGE_ENDPOINT or native_responses else request_headers(request, upstream_key)),
                 content=body if endpoint != "/v1/models" else None,
-                timeout=httpx.Timeout(connect=15.0, read=120.0, write=60.0, pool=15.0),
+                timeout=httpx.Timeout(connect=15.0, read=300.0 if endpoint == IMAGE_ENDPOINT else 120.0, write=60.0, pool=15.0),
             )
             if await run_in_threadpool(_mark_dispatch, reservation) is not True:
                 raise RuntimeError("Usage dispatch marker failed")
@@ -834,7 +880,7 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
                 )
                 return json_error(502, "upstream_error", "CodexProxy model list response failed.", request_id=request_id)
 
-        if _is_stream_request(payload, upstream):
+        if endpoint != IMAGE_ENDPOINT and _is_stream_request(payload, upstream):
             async def abandoned_before_stream():
                 # Closing an async generator before its first iteration does
                 # not enter its finally block. Own that admission explicitly.
@@ -912,22 +958,53 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
         except (ValueError, UnicodeDecodeError):
             receipt_payload = None
         success, outcome = _classify_json_response(response_body, protocol, upstream.status_code)
+        image_receipt_invalid = False
+        image_over_budget = False
+        details = billing_details(receipt_payload, protocol=protocol)
+        if endpoint == IMAGE_ENDPOINT:
+            # Images must never relay upstream SSE, malformed PNGs or guessed bills.
+            # Even exempt calls need a receipt consistent with the advertised model.
+            if success:
+                try:
+                    from app.credit_pricing import calculate_charge
+                    _, validation_quote = prepare_image_request(payload)
+                    if not valid_image_response(receipt_payload, expected_size=payload["size"]) or details is None:
+                        raise PricingError("image_receipt_invalid", "Image or usage receipt is invalid.")
+                    calculate_charge(validation_quote.snapshot, details)
+                    from app.image_generation import image_budget_exceeded
+                    image_over_budget = image_budget_exceeded(json.loads(validation_quote.snapshot), details)
+                except (PricingError, KeyError, TypeError, ValueError):
+                    image_receipt_invalid = True
+                    success, outcome = False, "image_receipt_invalid"
+            if image_receipt_invalid:
+                usage = (None, None, None, False)
+            # Large image bytes are never retained in usage previews/logs.
+            if not image_receipt_invalid and success:
+                response_body = json.dumps({"created": receipt_payload.get("created"),
+                    "data": [{"b64_json": receipt_payload["data"][0]["b64_json"]}],
+                    "usage": receipt_payload["usage"]}, separators=(",", ":")).encode()
+                headers = {"X-Request-ID": request_id, "Content-Type": "application/json", "Cache-Control": "no-store"}
+                if image_over_budget and not expected_admin_unmetered:
+                    headers["X-Credit-Status"] = "reconciliation_required"
         await _finish_async(
             reservation,
             key_row=key_row,
             request_id=request_id,
-            status_code=upstream.status_code,
+            status_code=502 if image_receipt_invalid else upstream.status_code,
             response_time_ms=int((time.monotonic() - started) * 1000),
             first_byte_ms=header_elapsed,
             outcome=outcome,
             success=success,
-            error_summary=None if success else f"upstream status {upstream.status_code}",
+            error_summary=("Invalid Image API image or usage receipt." if image_receipt_invalid else None if success else f"upstream status {upstream.status_code}"),
             usage=usage,
-            billing_usage=billing_details(receipt_payload, protocol=protocol),
+            billing_usage=None if image_receipt_invalid else details,
             billing_receipt_seen=billing_receipt_present(receipt_payload, protocol=protocol),
-            billing_release=_explicit_generation_rejection(receipt_payload, upstream.status_code, protocol),
+            billing_release=_explicit_generation_rejection(receipt_payload, upstream.status_code, protocol,
+                                                            request_model=payload.get("model") if payload else None),
             response_preview="[response body not retained]",
         )
+        if image_receipt_invalid:
+            return json_error(502, "upstream_error", "The Image API returned an invalid image or usage receipt; this request requires reconciliation.", request_id=request_id, code="image_receipt_invalid")
         return Response(content=response_body, status_code=upstream.status_code, headers=headers)
     except asyncio.CancelledError:
         with anyio.CancelScope(shield=True):
@@ -999,24 +1076,32 @@ async def playground_run(request: Request, user=Depends(require_developer)):
         payload = envelope.get("payload")
         if isinstance(key_id, bool) or not isinstance(key_id, int) or not 0 < key_id <= 9223372036854775807:
             raise ValueError("key_id must be a positive integer.")
-        if endpoint not in {"chat.completions", "responses"} or not isinstance(payload, dict):
+        if endpoint not in {"chat.completions", "responses", "images.generations"} or not isinstance(payload, dict):
             raise ValueError("Use endpoint chat.completions or responses and an object payload.")
     except (ValueError, TypeError, UnicodeDecodeError) as exc:
         if str(exc) == "request_too_large":
             return json_error(413, "invalid_request_error", "Request body is too large.", request_id=request_id, code="request_too_large")
         return json_error(400, "invalid_request_error", "Invalid playground request.", request_id=request_id, param="body")
-    path = "/v1/chat/completions" if endpoint == "chat.completions" else "/v1/responses"
+    path = {"chat.completions": "/v1/chat/completions", "responses": "/v1/responses", "images.generations": IMAGE_ENDPOINT}[endpoint]
     return await execute_gateway(path, request, session_user=user, key_id=key_id, provided_payload=payload)
 
 
 @router.get("/developer/playground/models")
-async def playground_models(request: Request, key_id: int = Query(..., gt=0, le=9223372036854775807), user=Depends(require_developer)):
+async def playground_models(request: Request, key_id: int = Query(..., gt=0, le=9223372036854775807), user=Depends(require_developer), protocol: str = Query("text")):
     from app.ai_catalog import snapshot
+    if protocol not in {"text", "images.generations"}:
+        return json_error(400, "invalid_request_error", "Unknown model protocol.", request_id=_request_id(request))
     key, allowed, failure = await run_in_threadpool(_load_authorization, None, "/v1/models", user_id=user["id"], key_id=key_id)
     if failure:
         status, message, code = failure
         return json_error(status, "permission_error", message, request_id=_request_id(request), code=code)
     catalog = await snapshot()
+    if protocol == "images.generations":
+        if not image_generation_available() or not endpoint_is_authorized(key, IMAGE_ENDPOINT):
+            return JSONResponse({"object": "list", "data": []}, headers={"Cache-Control": "no-store"})
+        models = [item for item in catalog["models"] if item.get("image_generation")
+                  and (allowed is None or item["id"] in allowed)]
+        return JSONResponse({"object": "list", "data": models}, headers={"Cache-Control": "no-store"})
     priced = set(priced_models())
     models = [item for item in catalog["models"] if item["id"] in priced
               and not item["id"].startswith("gpt-image-") and (allowed is None or item["id"] in allowed)]

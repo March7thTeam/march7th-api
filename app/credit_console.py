@@ -109,7 +109,8 @@ async def pricing_page(request: Request,user=Depends(optional_user)):
     prices=_prices()
     lines=[row for row in prices["models"] if row["model"] in live]
     others=[row for row in prices["models"] if row["model"] not in live]
-    return templates.TemplateResponse(request,"pricing.html",{"user":user,"prices":prices,"lines":lines,"others":others,"catalog":catalog})
+    from app.image_generation import IMAGE_PRICES
+    return templates.TemplateResponse(request,"pricing.html",{"user":user,"prices":prices,"lines":lines,"others":others,"catalog":catalog,"image_prices":IMAGE_PRICES})
 
 
 @router.get("/developer/credits",response_class=HTMLResponse)

@@ -217,3 +217,15 @@ python -m unittest discover -s tests
 ## License
 
 [MIT](LICENSE) © 2026 Luomo
+
+### 图像生成
+
+启用 `GATEWAY_IMAGE_GENERATION=true` 并设置服务端 `GATEWAY_IMAGE_API_KEY` 后，
+`POST /v1/images/generations` 通过固定的官方 OpenAI Images API 支持
+`gpt-image-2`、`gpt-image-1.5` 文生图，每次一张 PNG。文本请求仍使用 CodexProxy；
+`GATEWAY_IMAGE_INPUT` 独立控制已有文本模型的图像输入。
+
+新自助密钥包含 `images:generate` 和已计价图像模型，已有密钥权限保持原样。
+图像调用复用原有账户、模型白名单、配额、积分冻结与失败恢复流程，价格使用
+独立 `app/image_generation_prices.json` 版本。登录 `/developer/images` 可预览下载，
+参数、计费与服务端 SDK 示例见 [图像生成说明](docs/IMAGE_GENERATION.md)。

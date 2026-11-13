@@ -8,7 +8,7 @@
     <p>入门</p>
     <a href="#quickstart">快速开始</a><a href="#authentication">认证与密钥</a>
     <p>AI 接口</p>
-    <a href="#ai">OpenAI 兼容接口</a><a href="#images">图像输入</a><a href="#billing">积分与计费</a><a href="#errors">错误码</a>
+    <a href="#ai">OpenAI 兼容接口</a><a href="#images">图像输入</a><a href="#image-generation">图像生成</a><a href="#billing">积分与计费</a><a href="#errors">错误码</a>
     <p>业务接口</p>
     <a href="#endpoints">接口目录</a>
     <div class="route-links">{% for route in routes %}<a href="#endpoint-{{ route.id }}">{{ route.name }}</a>{% endfor %}</div>
@@ -36,7 +36,7 @@
       <h2>认证与密钥</h2>
       <p>使用 <code>Authorization: Bearer lapi_xxx</code> 或 <code>X-API-Key: lapi_xxx</code> 携带密钥；业务接口中标为“匿名可用”的无需认证。</p>
       <ul>
-        <li>权限按 scope 精确匹配。自助密钥包含 <code>models:read</code>、<code>chat:completions</code>、<code>responses:create</code>，默认每分钟 60 次。</li>
+        <li>权限按 scope 精确匹配。自助密钥包含 <code>models:read</code>、<code>chat:completions</code>、<code>responses:create</code>、<code>images:generate</code>，默认每分钟 60 次。已有密钥保持原权限，新增图像权限需重新签发或由管理员授权。</li>
         <li>每个账户最多保留 20 个有效密钥；所有密钥共用账户积分。</li>
         <li>账户停用后，名下密钥同步失效；业务服务权限由管理员单独配置。</li>
         <li>密钥只应放在服务端或受信任的本地应用里，不要写进前端代码或公开仓库。</li>
@@ -56,6 +56,8 @@
       <p class="section-note">支持文本与客户端函数工具；单次输出上限 128,000 token。未指定上限时，按你的可用积分自动放宽到最多 32,768（至少 2,048）；需要更长输出请显式设置 <code>max_tokens</code> / <code>max_output_tokens</code>。流式请求可加 <code>stream_options.include_usage</code> 获取最终用量。每个响应带 <code>X-Request-ID</code>，排查问题时请一并提供。模型用途与配置示例见 <a href="/models">模型线路</a>。</p>
     </section>
 
+    <p class="section-note">GPT-6 Astra、GPT-6.1 Sol 与 GPT-6.1 Terra 的函数工具请使用 <code>/v1/responses</code>，并按 Responses 格式传递 <code>reasoning</code>、<code>tools</code> 与 <code>max_output_tokens</code>。Astra 不支持把推理设为 <code>none</code>；旧 Chat 客户端需要切换协议，网关不会静默删除工具或降低推理。模型能否调用仍受密钥白名单和已计价型号限制。</p>
+
     <section id="images">
       <h2>图像输入</h2>
       {% if image_input_enabled() %}
@@ -69,7 +71,30 @@
       {% else %}
       <p>本站网关目前<strong>尚未开放</strong>图像输入，请求中带图片会返回 <code>400 billing_shape_unsupported</code>。开放后，标有“图像输入”的模型可以接收 https 或 base64 图片，按图像 token 计费。</p>
       {% endif %}
-      <p class="muted small">文件、音频、图像生成和 web search 等内置工具仍未开放。</p>
+      <p class="muted small">文件、音频和 web search 等内置工具仍未开放。图像生成使用下方独立接口。</p>
+    </section>
+
+    <section id="image-generation">
+      <h2>图像生成</h2>
+      <p><code>POST /v1/images/generations</code> 使用 <code>images:generate</code> 权限与模型白名单，支持 <code>gpt-image-2</code>、<code>gpt-image-1.5</code>。<a href="/developer/images">登录后试用、预览与下载 →</a></p>
+      <p>JSON 必须显式指定 model 和非空 prompt（最多 32,000 字符）。quality 支持 low / medium / high，省略或 auto 均采用 medium；size 支持 1024x1024 / 1024x1536 / 1536x1024，省略或 auto 均采用 1024x1024。n 仅支持整数 1，输出格式仅 PNG。返回 <code>data[0].b64_json</code>、分模态 <code>usage</code> 与响应头 <code>X-Request-ID</code>。</p>
+      <p>不支持编辑、批量、透明背景、stream、tools、partial_images、response_format 或其他额外参数；额外字段返回 400。遇到待核请保留请求 ID，重试会产生一次新调用。</p>
+      <div class="screen"><div class="screen-bar"><span class="title">cURL · Images API</span></div><pre>curl {{ app_base_url }}/v1/images/generations \
+  -H "Authorization: Bearer $LUOMO_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-image-2","prompt":"一列穿过星空的列车","quality":"low","size":"1024x1024","n":1}'</pre></div>
+      <div class="screen section-gap"><div class="screen-bar"><span class="title">Python · OpenAI SDK</span></div><pre>import base64
+import os
+from openai import OpenAI
+
+client = OpenAI(base_url="{{ app_base_url }}/v1", api_key=os.environ["LUOMO_API_KEY"])
+result = client.images.generate(
+    model="gpt-image-2", prompt="一列穿过星空的列车",
+    quality="low", size="1024x1024", n=1, output_format="png",
+)
+with open("generated.png", "wb") as image:
+    image.write(base64.b64decode(result.data[0].b64_json))</pre></div>
+      <p class="muted small">先按输入与输出上界冻结预算，随后按官方 Standard 分模态价格与实际用量结算。取消或超时后可能已在生成，缺失/矛盾用量或超出预算会保留本笔冻结并进入待核，不根据图片大小猜费用。有效图片与可计价回执超预算时仍可下载，响应头 <code>X-Credit-Status: reconciliation_required</code> 表示保留真实费用待核；已知费用超出冻结总额后，后续生成返回 409。详见<a href="/pricing#image-pricing">图像价格</a>。</p>
     </section>
 
     <section id="billing">

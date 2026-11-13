@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timezone
 from fastapi import HTTPException
 
-AI_SCOPES = {"models:read", "chat:completions", "responses:create"}
+AI_SCOPES = {"models:read", "chat:completions", "responses:create", "images:generate"}
 
 
 def validate_policy(scopes, models, rpm, daily, monthly, expires_at, *, policy="allowlist", legacy=False):
@@ -14,7 +14,7 @@ def validate_policy(scopes, models, rpm, daily, monthly, expires_at, *, policy="
         raise HTTPException(400, "模型策略无效")
     if any(len(model) > 120 or not re.fullmatch(r"[A-Za-z0-9._:/-]+", model) for model in model_list) or len(model_list) > 100:
         raise HTTPException(400, "模型 ID 格式无效")
-    if policy == "allowlist" and set(scope_list) & {"chat:completions", "responses:create"} and not model_list:
+    if policy == "allowlist" and set(scope_list) & {"chat:completions", "responses:create", "images:generate"} and not model_list:
         raise HTTPException(400, "生成权限至少需要一个模型 ID")
     if any(value < 0 for value in (rpm, daily, monthly)):
         raise HTTPException(400, "配额不得为负数；0 表示不限")

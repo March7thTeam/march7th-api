@@ -74,7 +74,7 @@ def developer_keys(request: Request, user=Depends(require_developer), created: s
 @router.post("/developer/keys/request")
 def developer_key_request(request: Request, name: str = Form(...), key_nonce: str = Form(""), requested_scopes: str = Form(""), requested_reason: str = Form(""), user=Depends(require_developer)):
     scopes = {s for s in re.split(r"[,\s]+", requested_scopes.strip()) if s}
-    if scopes - {"models:read", "chat:completions", "responses:create"}:
+    if scopes - {"models:read", "chat:completions", "responses:create", "images:generate"}:
         raise HTTPException(400, "自助密钥只支持 AI 协议权限；业务服务权限请联系管理员。")
     with closing(connect()) as conn, conn:
         result = issue_self_key(conn, user["id"], name, key_nonce)

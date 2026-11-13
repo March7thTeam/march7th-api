@@ -11,7 +11,7 @@ from app.keyring import generate_api_key,hash_api_key,verify_api_key
 from app.utils.timefmt import now_iso
 
 NAME='管理员专属全模型无限额 t001'
-SCOPES='models:read,chat:completions,responses:create,admin:unmetered'
+SCOPES='models:read,chat:completions,responses:create,images:generate,admin:unmetered'
 folder=settings.database_path.parent/'private-credentials'
 folder.mkdir(mode=0o700,exist_ok=True)
 assert not folder.is_symlink()

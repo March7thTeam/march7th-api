@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.credit_pricing import priced_models
+from app.image_generation import image_generation_available, image_models
 from app.image_input import supports_vision
 from app.db import connect
 from app.model_lines import board_state, line_for, verification_note
@@ -98,21 +99,31 @@ async def snapshot():
             pass
         entries = []
         priced = set(priced_models())
+        image_priced = set(image_models())
+        images_available = image_generation_available()
+        if images_available:
+            # The official Images API is independent of CodexProxy's text
+            # listing and availability. Configured image models remain visible.
+            models = sorted(set(models) | image_priced)
         priority = {model: index for index, model in enumerate(GUIDANCE)}
         for model_id in sorted(models, key=lambda model: (model not in priced, priority.get(model, len(priority)), model)):
-            billable = model_id in priced
+            image_generation = images_available and model_id in image_priced
+            billable = model_id in priced or image_generation
             name, category, use = GUIDANCE.get(model_id, (model_id, "未评估", "上游列出的模型；用途和兼容性尚未验证。"))
             if model_id.startswith("gpt-image-"):
-                category, use = "图像模型", "当前网关未开放图像生成接口，不能直接用于文本示例。"
+                category = "图像模型"
+                use = "文生图：每次一张 PNG；使用 Images API，按文本输入与图像/文本输出分别计费。" if image_generation else "当前网关未开放此图像模型的生成接口，不能直接用于文本示例。"
             elif not billable:
                 use = "上游列出的模型，但没有官方标准文本价格；个人密钥暂不能调用。"
             text_candidate = billable and not model_id.startswith("gpt-image-")
             checked = public_verification(verification, model_id)
             entries.append({"id": model_id, "name": name, "category": category, "use": use, "billable": billable,
-                            "text_candidate": text_candidate, "vision": supports_vision(model_id), "line": line_for(model_id), "state": board_state(model_id, text_candidate),
-                            "verification": checked, "note": verification_note(checked, text_candidate)})
+                            "text_candidate": text_candidate, "image_generation": image_generation, "callable": text_candidate or image_generation,
+                            "kind": "image_generation" if model_id in image_priced else "text",
+                            "vision": supports_vision(model_id), "line": line_for(model_id), "state": board_state(model_id, text_candidate or image_generation),
+                            "verification": checked, "note": verification_note(checked, text_candidate or image_generation)})
         _cache = {"service": "LuomoAPI Hub", "version": "2026.10-interchange-t001", "status": "operational" if db_ok and upstream_ok else "degraded", "updated_at": checked_at, "cache_seconds": 30,
                   "components": [{"name": "网关应用", "status": "operational", "detail": "当前 HTTP 请求已到达应用"}, {"name": "数据库", "status": "operational" if db_ok else "degraded", "detail": "只读查询成功" if db_ok else "查询失败"}, {"name": "AI 上游目录", "status": "operational" if upstream_ok else "degraded", "detail": reason, "latency_ms": latency}],
-                  "models": entries, "model_count": len(models), "default_model": default_model(entries), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。"}
+                  "models": entries, "image_generation_enabled": images_available, "model_count": len(models), "default_model": default_model(entries), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。"}
         _expires = time.monotonic() + 30
         return _cache

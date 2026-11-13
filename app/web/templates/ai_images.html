@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}图像生成 · {{ app_name }}{% endblock %}
+{% block head_extra %}<script src="{{ asset('images.js') }}" defer></script>{% endblock %}
+{% block content %}
+{% set active_keys = keys|selectattr('status', 'equalto', 'active')|list %}
+<div class="page-head">
+  <div><p class="eyebrow">Image line · 图像生成</p><h1>把想象带上这一站</h1><p class="lead">每次生成一张 PNG，使用你所选密钥的权限与账户积分。按实际文本输入、图片与文本输出 token 结算，生成后可预览并下载。</p></div>
+  <div class="actions"><a class="btn ghost" href="/developer/playground">文本试用</a><a class="btn ghost" href="/pricing#image-pricing">价格</a><a class="btn ghost" href="/developer/usage">用量分析</a></div>
+</div>
+{% if not image_generation_enabled %}
+<div class="notice warn"><strong>图像线路暂未开放</strong><p>请稍后重试，或查看<a href="/status">服务状态</a>。</p></div>
+{% elif not active_keys %}
+<div class="card empty-state"><strong>先领一把密钥</strong><p>图像调用需要 images:generate 权限和对应模型白名单。</p><a class="btn primary" href="/developer/keys">去签发密钥</a></div>
+{% else %}
+<div class="playground image-playground">
+  <section class="card">
+    <form id="image-form" class="form" autocomplete="off" data-model="{{ request.query_params.get('model', 'gpt-image-2') }}">
+      <label class="field">密钥<select id="image-key" required>{% for key in active_keys %}<option value="{{ key.id }}"{% if request.query_params.get('key', '') == key.id|string %} selected{% endif %}>{{ key.name }} · {{ key.key_prefix }}</option>{% endfor %}</select></label>
+      <label class="field">模型<select id="image-model" required disabled></select><span id="image-model-status" class="hint" role="status">正在读取这把密钥可调用的图像模型…</span></label>
+      <div class="form two">
+        <label class="field">质量<select id="image-quality"><option value="low">Low · 轻量试画</option><option value="medium" selected>Medium · 标准</option><option value="high">High · 精细</option></select></label>
+        <label class="field">尺寸<select id="image-size"><option value="1024x1024">1024 × 1024 · 方形</option><option value="1024x1536">1024 × 1536 · 竖幅</option><option value="1536x1024">1536 × 1024 · 横幅</option></select></label>
+      </div>
+      <label class="field">画面描述<textarea id="image-prompt" rows="7" maxlength="32000" required placeholder="一列穿过星空的列车，温暖的车窗灯光，水彩插画风格。"></textarea></label>
+      <p id="image-estimate" class="muted small" aria-live="polite">—</p>
+      <p class="muted small">先冻结预算，按实际用量结算，多余部分退回。生成可能需要数分钟；离开页面或连接中断后，上游可能仍在生成，缺少回执时会保留本笔冻结待核。重试会创建新调用。</p>
+      <div class="actions"><button id="image-send" class="btn primary" type="submit" disabled>生成 PNG →</button><a class="btn ghost" href="/developer/credits">积分余额</a></div>
+    </form>
+  </section>
+  <section class="screen" aria-label="生成图片">
+    <div class="screen-bar"><span class="title">IMAGE · PNG</span><span id="image-status" role="status" aria-live="polite">等待请求</span></div>
+    <div class="image-preview"><p id="image-placeholder" class="muted">生成的图片会显示在这里。</p><img id="generated-image" alt="根据你的画面描述生成的图片" hidden></div>
+    <p id="image-error" class="image-message" role="alert" hidden></p>
+    <div class="output-status"><span id="image-meta">—</span><form id="image-download-form" action="/developer/images/download" method="post" class="inline-form">
+      <input id="image-download-data" type="hidden" name="b64_json" value="">
+      <input id="image-download-size" type="hidden" name="size" value="">
+      <button id="image-download" class="btn sm" type="submit" hidden disabled>下载 PNG ↓</button>
+    </form></div>
+    <p id="image-usage" class="image-message mono"></p>
+  </section>
+</div>
+{% endif %}
+{% endblock %}
