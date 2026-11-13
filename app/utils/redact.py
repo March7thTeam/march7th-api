@@ -66,3 +66,40 @@ def preview(value, limit: int = 4000) -> str:
     else:
         text = redact_text(clean)
     return text[:limit]
+
+
+def gateway_redact_text(value: object, limit: int = 1000) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    if any(word in text.lower() for word in SENSITIVE_WORDS):
+        return "********"
+    if len(text) > limit:
+        return text[:limit] + "...[truncated]"
+    return text
+
+
+def redact_json_like(value: object, limit: int = 1000) -> str:
+    try:
+        if isinstance(value, (dict, list)):
+            def scrub(obj: object) -> object:
+                if isinstance(obj, dict):
+                    out: dict[object, object] = {}
+                    for key, child in obj.items():
+                        if any(word in str(key).lower() for word in SENSITIVE_WORDS):
+                            out[key] = "********"
+                        else:
+                            out[key] = scrub(child)
+                    return out
+                if isinstance(obj, list):
+                    return [scrub(item) for item in obj[:20]]
+                if isinstance(obj, str):
+                    return gateway_redact_text(obj, limit=300)
+                return obj
+
+            text = json.dumps(scrub(value), ensure_ascii=False)
+        else:
+            text = str(value)
+        return text if len(text) <= limit else text[:limit] + "...[truncated]"
+    except Exception:
+        return "[unserializable]"

@@ -58,6 +58,32 @@
   // Destructive forms ask once before submitting.
   $$('form[data-confirm]').forEach(form => form.addEventListener('submit', event => { if (!confirm(form.dataset.confirm)) event.preventDefault(); }));
 
+  // Model catalog filter chips (all / callable / image input).
+  const modelChips = $$('[data-model-filter]');
+  const modelCards = $$('.line-card[data-callable]');
+  modelChips.forEach(chip => chip.addEventListener('click', () => {
+    const mode = chip.dataset.modelFilter; let shown = 0;
+    modelChips.forEach(item => item.setAttribute('aria-pressed', String(item === chip)));
+    modelCards.forEach(card => {
+      const visible = mode === 'all' || (mode === 'callable' && card.dataset.callable === '1') || (mode === 'vision' && card.dataset.vision === '1');
+      card.hidden = !visible; if (visible) shown++;
+    });
+    const count = $('#model-count'); if (count) count.textContent = mode === 'all' ? '' : `显示 ${shown} 条线路`;
+  }));
+
+  // Busy submit buttons: label + disable after the browser has captured the form data, so a double click
+  // cannot send the same form twice. Restored if the page comes back from the back/forward cache.
+  document.addEventListener('submit', event => {
+    const button = event.submitter;
+    if (event.defaultPrevented || !button || !button.dataset.busy) return;
+    button.dataset.idle = button.innerHTML;
+    setTimeout(() => { button.disabled = true; button.textContent = button.dataset.busy; }, 0);
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    $$('[data-busy][data-idle]').forEach(button => { button.disabled = false; button.innerHTML = button.dataset.idle; });
+  });
+
   // Password visibility
   $$('.password-toggle').forEach(button => button.addEventListener('click', () => {
     const input = document.getElementById(button.getAttribute('aria-controls')); if (!input) return;

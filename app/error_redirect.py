@@ -13,6 +13,8 @@ from app.client_ip import client_address
 
 def _is_api_request(request: Request) -> bool:
     path = request.url.path
+    if path in {"/developer/playground/run", "/developer/playground/models"}:
+        return True
     # Health probes must always see the real status code, never an error-page redirect.
     if path in {"/health", "/ready"}:
         return True

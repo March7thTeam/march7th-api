@@ -2,7 +2,9 @@ import base64
 import hashlib
 import hmac
 import secrets
-import time
+import re
+from datetime import datetime, timedelta, timezone
+from app.utils.timefmt import now_iso
 from contextlib import closing
 from typing import Annotated
 
@@ -45,26 +47,72 @@ def _sign(payload: str) -> str:
     return hmac.new(settings.session_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def create_session(username: str) -> str:
-    expires_at = int(time.time()) + SESSION_MAX_AGE_SECONDS
-    payload = base64.urlsafe_b64encode(f"{username}:{expires_at}".encode("utf-8")).decode("ascii")
-    return f"{payload}.{_sign(payload)}"
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_session(user_id_or_username: int | str, *, user_agent: str = "", source_ip: str | None = None,
+                   expected_password_hash: str | None = None) -> str:
+    """Issue an opaque 12-hour session; only its SHA-256 digest is persisted.
+
+    Accept an existing numeric user ID or username, including for isolated tests.
+    Login supplies the authenticated password hash to guard concurrent resets.
+    """
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    with closing(connect()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        field = "id" if isinstance(user_id_or_username, int) else "username"
+        user = conn.execute(f"SELECT * FROM users WHERE {field}=?", (user_id_or_username,)).fetchone()
+        if not user:
+            raise ValueError("Session owner does not exist.")
+        if expected_password_hash is not None and (not api_user_eligible(user["status"]) or user["password_hash"] != expected_password_hash):
+            raise HTTPException(401, "账户凭据已变更，请重新登录。")
+        conn.execute("""INSERT INTO user_sessions(token_hash,user_id,created_at,expires_at,last_seen_at,user_agent,ip_hash)
+                        VALUES (?,?,?,?,?,?,?)""",
+                     (hash_session_token(token), user["id"], now.isoformat(),
+                      (now + timedelta(seconds=SESSION_MAX_AGE_SECONDS)).isoformat(), now.isoformat(),
+                      user_agent[:512], hash_session_token(source_ip) if source_ip else None))
+    return token
+
+
+def session_user(token: str | None, request: Request | None = None):
+    # Reject legacy signed cookies before any DB lookup.
+    if not token or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        return None
+    now = datetime.now(timezone.utc)
+    with closing(connect()) as conn, conn:
+        row = conn.execute("""SELECT u.*, s.id AS session_id, s.last_seen_at AS session_last_seen
+            FROM user_sessions s JOIN users u ON u.id=s.user_id
+            WHERE s.token_hash=? AND s.revoked_at IS NULL AND julianday(s.expires_at)>julianday(?)
+              AND u.status IN ('active','pending')""", (hash_session_token(token), now.isoformat())).fetchone()
+        if row is None:
+            return None
+        cutoff = (now - timedelta(minutes=5)).isoformat()
+        if row["session_last_seen"] <= cutoff:
+            # The predicate makes concurrent readers share one update per 5 minutes.
+            conn.execute("UPDATE user_sessions SET last_seen_at=? WHERE id=? AND last_seen_at<=? AND revoked_at IS NULL",
+                         (now.isoformat(), row["session_id"], cutoff))
+        if request is not None:
+            request.state.session_id = row["session_id"]
+        return row
 
 
 def verify_session(token: str | None) -> str | None:
-    if not token or "." not in token or not settings.session_secret:
-        return None
-    payload, _, signature = token.partition(".")
-    if not secrets.compare_digest(signature, _sign(payload)):
-        return None
-    try:
-        raw = base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8")
-        username, expires_text = raw.rsplit(":", 1)
-        if int(expires_text) < int(time.time()):
-            return None
-    except Exception:
-        return None
-    return username
+    user = session_user(token)
+    return user["username"] if user else None
+
+
+def revoke_session(token: str | None) -> None:
+    if token:
+        with closing(connect()) as conn, conn:
+            conn.execute("UPDATE user_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
+                         (now_iso(), hash_session_token(token)))
+
+
+def revoke_user_sessions(conn, user_id: int, *, except_id: int | None = None) -> None:
+    conn.execute("UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL AND (? IS NULL OR id!=?)",
+                 (now_iso(), user_id, except_id, except_id))
 
 
 def get_user_by_username(username: str):
@@ -85,19 +133,16 @@ def current_user(
     request: Request,
     session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) :
-    username = verify_session(session_token)
-    if username:
-        user = get_user_by_username(username)
-        if user and user["status"] not in {"disabled", "suspended"}:
-            return user
+    user = session_user(session_token, request)
+    if user:
+        return user
     if "text/html" in request.headers.get("accept", ""):
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 
-def optional_user(session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None):
-    username = verify_session(session_token)
-    return get_user_by_username(username) if username else None
+def optional_user(request: Request, session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None):
+    return session_user(session_token, request)
 
 
 def require_admin(user=Depends(current_user)):

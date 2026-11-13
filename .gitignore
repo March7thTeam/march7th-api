@@ -15,3 +15,5 @@ backups/
 .DS_Store
 .idea/
 .vscode/
+.dual-dev/
+output/

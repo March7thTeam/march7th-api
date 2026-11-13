@@ -79,6 +79,42 @@ Key 只在创建时显示一次，数据库只保存哈希。支持 `Authorizati
 - 拿不到可靠用量、实际费用超出可用余额或回执冲突时，记录转为“待核”，由管理员在 `/admin/credits` 人工处理并留审计记录；系统不会自动透支。
 - 只有经过签名校验的 Stripe 回执才会入账；`CREDIT_PAYMENT_PROVIDER` 留空时不开放在线支付，可用兑换码或管理员发放。
 
+## 账户与服务端会话
+
+登录后访问 `/account` 可查看用户名、邮箱与验证状态、角色、注册时间，修改密码及管理活动设备。会话有效期仍为 12 小时，cookie 使用 `secrets.token_urlsafe(32)`；`user_sessions` 只保存 SHA-256 摘要。最近活动最多每 5 分钟写入一次。旧签名 cookie 不再接受，升级后用户需重新登录。
+
+- `POST /logout` 撤销当前会话；`POST /account/password` 校验当前密码及两次新密码（至少 10 字符，不得相同），成功后撤销其他会话。
+- `POST /account/sessions/{id}/revoke` 退出某个自己的设备；`POST /account/sessions/revoke-others` 退出其他全部设备。
+- `GET/POST /forgot-password` 按邮箱及来源 IP 原子限流；存在、不存在、限流及 SMTP 未配置时均显示同一提示。邮箱每小时最多 5 次，至少间隔 60 秒；来源每小时最多 120 次。
+- `GET/POST /reset-password?token=…` 使用 60 分钟内有效的一次性令牌，数据库只保存哈希。GET 不消费令牌；成功重置会使该用户全部重置令牌失效、撤销全部会话，跳转 `/login?reset=1`。页面使用 `no-store` 与 `no-referrer`。
+- 管理员将用户设为 `suspended` / `disabled` 时撤销全部会话，重新启用也不会复活旧 cookie。
+
+数据库迁移只新增表与索引，启动自动执行；保留已有用户、key 与账本数据。`SESSION_SECRET` 仍用于自助密钥及充值表单 nonce 等签名。
+
+## 控制台试用与用量分析
+
+`/developer/playground` 直接选择自己名下的有效 key，无需保存或粘贴原文。服务端登录开发者接口：
+
+```text
+POST /developer/playground/run
+Content-Type: application/json
+{"key_id": 123, "endpoint": "chat.completions", "payload": {"model": "gpt-6-luna", "messages": [{"role": "user", "content": "你好"}]}}
+GET /developer/playground/models?key_id=123
+```
+
+`endpoint` 也支持 `responses`。试用与 `/v1` 共用权限、模型白名单、限速、配额、积分预留、上游转发、SSE 和结算执行器。用量日志路径标识为 `developer/playground/run/{endpoint}`；会话与密钥归属在预留事务中再次检查。POST 受同源 Origin 校验保护。
+
+`GET /api/developer/usage/analytics?days=14` 返回自己的聚合；管理员使用 `GET /api/admin/usage/analytics?days=14` 获取全站聚合。`days` 仅支持 7 / 14 / 30。按 UTC 日补零，包含请求数、成功/失败/进行中、输入/输出 token 和 `credits` 十进制字符串；积分只统计 `credit_holds.status='settled'` 的 `actual_units`，不把预留或待核当作扣费。`by_model` / `by_key` 各列前 10，其余合并为“其他”。两接口均为 `Cache-Control: no-store`。开发者概览及用量页的 `analytics` 上下文提供 14 天数据，供后续服务端图表使用。
+
+## 图像输入（默认关闭）
+
+设置 `GATEWAY_IMAGE_INPUT=true` 后，`app/model_capabilities.json` 明确列出的已计价文本模型支持图像输入。`gpt-image-*` 与 `*codex-spark*` 不在清单中；未计价模型不能借此调用。公开目录 `/api/public/ai-catalog` 与 `/models` 的每个模型均带 `vision: bool`，表示模型能力，实际启用仍取决于环境变量。
+
+- Chat：在 `messages[].content[]` 中使用 `{"type":"image_url","image_url":{"url":"https://example.com/image.png","detail":"auto"}}`。
+- Responses：在 `input[].content[]` 中使用 `{"type":"input_image","image_url":"https://example.com/image.png","detail":"auto"}`。
+- `detail` 可省略，支持 `auto` / `low` / `high`。URL 仅允许 HTTPS 或 `data:image/(png|jpeg|webp|gif);base64,…`；每请求最多 16 张，data 解码后每张最多 8 MiB，总请求体仍最多 20 MiB。网关不自行下载图片。文件、音频、内置工具等仍拒绝。
+- 输入预留上界为：仅把图像字段中的 data URL 换成短占位符后的请求 UTF-8 字节数 + 4096 + 图像数 × 8000。按此合并上界判断长上下文价格，快照记录 `images` 和 `image_token_ceiling`。结算使用上游真实 token；图像请求实际费用超出预留即转人工待核，余额不足、缺失/冲突回执也进入既有待核流程，不改变价格表版本或允许透支。
+
 ## API 目录网关
 
 ```bash
@@ -105,13 +141,14 @@ curl https://api.example.com/api/public/v1/demo/status \
 
 | 变量 | 作用 |
 | --- | --- |
-| `SESSION_SECRET` | 会话签名，至少 32 个字符 |
+| `SESSION_SECRET` | 表单 nonce 等服务端签名密钥，至少 32 个字符；会话 cookie 本身为不透明随机令牌 |
 | `APP_BASE_URL` | 对外地址，用于邮件链接和页面展示 |
 | `DATABASE_PATH` | SQLite 路径，默认 `/app/data/luomoapi.db` |
 | `TRUSTED_PROXY_PEERS` | 可信反向代理地址，逗号分隔；默认 `127.0.0.1,::1,172.20.0.1` |
 | `CODEXPROXY_BASE_URL` / `CODEXPROXY_API_KEY` | 模型网关的 OpenAI 兼容上游 |
 | `CREDIT_PAYMENT_PROVIDER` / `CREDIT_STRIPE_*` | 在线充值，留空即关闭 |
-| `SMTP_*` | 注册邮箱验证 |
+| `GATEWAY_IMAGE_INPUT` | 默认 `false`；仅为能力清单中已计价文本模型开放图像输入 |
+| `SMTP_*` | 注册邮箱验证及找回密码邮件 |
 | `SECURITY_CONTACT` | `/.well-known/security.txt` 的联系方式 |
 
 ## 健康检查与公开接口
@@ -130,12 +167,16 @@ GET /.well-known/security.txt
 
 ```text
 app/
-  main.py                 应用装配、页面与后台路由
+  main.py                 create_app、lifespan、中间件与静态资源
+  routes/                 public、auth、account、developer、admin、catalog_admin 路由
+  auth.py                 服务端会话、密码哈希、权限依赖
   cliproxy_gateway.py     /v1 模型网关
   public_gateway_secure.py  目录网关与共享的 key / 配额 / 日志工具
   upstream_security.py    上游解析与地址钉定
   ai_*.py                 模型目录、key 策略、用量统计、控制台
   credit_*.py             积分账本、定价、支付、积分控制台
+  image_input.py          图像形状、URL、大小与计价输入上界
+  model_capabilities.json  显式模型图像输入能力清单
   login_throttle.py       登录限流
   client_ip.py            可信代理与真实来源
   web/templates/          Jinja2 模板
@@ -159,7 +200,9 @@ docs/GATEWAY.md           路由模型说明
 | `scripts/credit_browser_fixture.py` | 本地一次性浏览器测试环境，不连接真实上游与邮件 |
 | `scripts/credit_candidate_probe.py` | 对隔离候选库做有界的真实上游验收 |
 
-`data/`、`.env` 与备份目录已在 `.gitignore` 中排除。
+`data/`、`output/`、`.env` 与备份目录已在 `.gitignore` 中排除。
+
+本地夹具启动：`.venv/bin/python scripts/credit_browser_fixture.py`，仅监听 `127.0.0.1:8793`。数据库位于项目内 `output/browser-fixture.sqlite`。提供管理员 `qa_admin`、开发者 `qa_dev`（3 把 key、跨 14 天 60 条成功/失败与多模型的已结算用量）、兼容账号 `qa_registered`、2 条公开文档路由；夹具密码均为 `FixtureOnly-2026`。路由及其假上游默认停用，邮件/支付/模型上游凭据在进程内清空，重复运行不重复加分或播种用量。夹具只用于本地。
 
 ## 开发与测试
 

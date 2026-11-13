@@ -31,13 +31,26 @@
 
 <section class="section">
   <div class="wrap">
-    <div class="section-head"><div><p class="eyebrow">Boarding · 上车三步</p><h2>从注册到第一次调用，四站直达。</h2></div><a class="text-link" href="/docs#quickstart">快速开始文档</a></div>
+    <div class="section-head"><div><p class="eyebrow">Boarding · 上车</p><h2>从注册到第一次调用，三步。</h2></div><a class="text-link" href="/docs#quickstart">快速开始文档</a></div>
     <ol class="line-diagram">
-      <li><span class="no">01</span><h3>注册账户</h3><p>填写用户名、邮箱和密码，立即启用。</p></li>
-      <li><span class="no">02</span><h3>领取密钥</h3><p>在控制台自助签发，完整密钥只显示一次。</p></li>
-      <li><span class="no">03</span><h3>获取积分</h3><p>兑换码或管理员加分到账；查询模型目录免费。</p></li>
-      <li><span class="no">终点</span><h3>开始调用</h3><p>换上 base_url 和密钥，在控制台查看用量。</p></li>
+      <li><span class="no">01</span><h3>注册账户</h3><p>用户名、邮箱和密码，提交即可用，无需人工审核。</p><a href="/register">去注册 →</a></li>
+      <li><span class="no">02</span><h3>领取密钥 · 获取积分</h3><p>控制台自助签发密钥；兑换码或在线充值，¥1 = 100 积分。</p></li>
+      <li><span class="no">终点</span><h3>开始调用</h3><p>把 base_url 换成本站地址。先在在线试用里发一句，再接进你的应用。</p></li>
     </ol>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head"><div><p class="eyebrow">Capabilities · 能力</p><h2>兼容、透明、可追溯。</h2><p>网关只做一件事：把你的请求可靠地送到模型线路，并把每一分积分算清楚。</p></div></div>
+    <div class="features">
+      <div class="feature"><span class="no" aria-hidden="true">01</span><h3>两种协议</h3><p><code>/v1/chat/completions</code> 与 <code>/v1/responses</code>，JSON 和 SSE 流式都支持，官方 SDK 直接可用。</p></div>
+      <div class="feature"><span class="no" aria-hidden="true">02</span><h3>函数工具</h3><p>支持调用方自己执行的 function / custom tools，单次输出最多 128k token。</p></div>
+      <div class="feature"><span class="no" aria-hidden="true">03</span><h3>{{ '图像输入' if image_input_enabled() else '纯文本计费' }}</h3><p>{% if image_input_enabled() %}支持视觉的模型可以接收 https 或 base64 图片，每次最多 16 张，按图像 token 结算。{% else %}按上游回报的文本 token 精确结算；文件、音频和内置工具暂不开放。{% endif %}</p></div>
+      <div class="feature"><span class="no" aria-hidden="true">04</span><h3>先冻结，后结算</h3><p>每次调用先按上限冻结积分，完成后按实际用量结算，多余部分立即退回。</p></div>
+      <div class="feature"><span class="no" aria-hidden="true">05</span><h3>每次都有回执</h3><p>响应头带 <code>X-Request-ID</code>，控制台能按请求 ID 查到模型、token 和扣费。</p></div>
+      <div class="feature"><span class="no" aria-hidden="true">06</span><h3>密钥可控</h3><p>多把密钥共用余额，可随时撤销；管理员可按密钥限定模型、频率和额度。</p></div>
+    </div>
   </div>
 </section>
 
@@ -48,9 +61,9 @@
       <h2>沿用你熟悉的 SDK，<br>只换一行地址。</h2>
       <p class="muted-lead">官方 OpenAI SDK、AIRI 等「OpenAI 兼容」客户端都能直接使用。</p>
       <ul class="check-list">
-        <li><strong>两种协议</strong>：<code>/v1/chat/completions</code> 与 <code>/v1/responses</code>，均支持 SSE 流式。</li>
-        <li><strong>文本与函数工具</strong>：单次输出上限 128k token；不指定时按可用积分自动放宽，最多 32k。</li>
-        <li><strong>可追溯</strong>：每个响应带 <code>X-Request-ID</code>，控制台按请求 ID 定位结果与扣费。</li>
+        <li><strong>官方 SDK</strong>：Python、Node.js 的 <code>openai</code> 包设置 <code>base_url</code> 即可。</li>
+        <li><strong>兼容客户端</strong>：AIRI、Cherry Studio 等选 “OpenAI Compatible”，填地址、密钥和模型 ID。</li>
+        <li><strong>不写死上限</strong>：未指定输出上限时，网关按可用积分自动放宽到最多 32k token。</li>
       </ul>
       <a class="text-link" href="/models#configuration">生成你的客户端配置</a>
     </div>

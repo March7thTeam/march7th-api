@@ -74,3 +74,87 @@ console.log(reply.choices[0].message.content);</pre>
   <div class="screen-foot"><span>OpenAI 兼容 · Chat Completions</span><span>密钥放在服务端环境变量</span></div>
 </div>
 {%- endmacro %}
+
+{# ---------- v2 charts: server-rendered SVG, CSP-safe: geometry lives in SVG attributes, never in inline styles ---------- #}
+{% macro _tick_step(count) -%}{{ 1 if count <= 7 else (2 if count <= 14 else 5) }}{%- endmacro %}
+
+{% macro daily_bars(daily, label='每日请求') -%}
+{%- set ns = namespace(max=0) -%}
+{%- for d in daily %}{% if d.requests > ns.max %}{% set ns.max = d.requests %}{% endif %}{% endfor -%}
+{%- set top = ns.max if ns.max > 3 else 4 -%}
+{%- set top = top + (top % 2) -%}
+{%- set W, H, L, B, T = 720, 210, 34, 26, 10 -%}
+{%- set n = daily|length -%}
+{%- set slot = (W - L) / (n if n else 1) -%}
+{%- set bw = slot * 0.62 -%}
+{%- set ih = H - B - T -%}
+{%- set step = _tick_step(n)|int -%}
+<svg viewBox="0 0 {{ W }} {{ H }}" role="group" aria-label="{{ label }}，共 {{ n }} 天">
+  {% for frac in (0.5, 1) %}{% set y = T + ih * (1 - frac) %}<line class="grid-line" x1="{{ L }}" x2="{{ W }}" y1="{{ y }}" y2="{{ y }}"/><text class="ylabel" x="{{ L - 8 }}" y="{{ y + 4 }}">{{ (top * frac)|int }}</text>{% endfor %}
+  {% for d in daily %}
+  {%- set x = L + slot * loop.index0 + (slot - bw) / 2 -%}
+  {%- set hs = ih * d.succeeded / top -%}
+  {%- set hf = ih * (d.failed + d.in_flight) / top -%}
+  <g class="col" tabindex="0" role="img" aria-label="{{ d.day }}：{{ d.requests }} 次请求，成功 {{ d.succeeded }}，失败 {{ d.failed }}，消耗 {{ d.credits|credit }} 积分">
+    <title>{{ d.day }} · {{ d.requests }} 次 · 成功 {{ d.succeeded }} / 失败 {{ d.failed }} · {{ d.credits|credit }} 积分</title>
+    <rect class="hit" x="{{ L + slot * loop.index0 }}" y="{{ T }}" width="{{ slot }}" height="{{ ih }}"/>
+    {% if hs > 0 %}<rect class="bar-a" x="{{ x }}" y="{{ T + ih - hs }}" width="{{ bw }}" height="{{ hs }}" rx="2"/>{% endif %}
+    {% if hf > 0 %}<rect class="bar-b" x="{{ x }}" y="{{ T + ih - hs - hf }}" width="{{ bw }}" height="{{ hf }}" rx="2"/>{% endif %}
+    {% if loop.index0 % step == 0 or loop.last %}<text class="tick" x="{{ x + bw / 2 }}" y="{{ H - 6 }}">{{ d.day[5:] }}</text>{% endif %}
+  </g>
+  {% endfor %}
+  <line class="baseline" x1="{{ L }}" x2="{{ W }}" y1="{{ T + ih }}" y2="{{ T + ih }}"/>
+</svg>
+{%- endmacro %}
+
+{% macro credit_bars(daily, label='每日消耗积分') -%}
+{%- set ns = namespace(max=0.0) -%}
+{%- for d in daily %}{% set v = d.credits|float %}{% if v > ns.max %}{% set ns.max = v %}{% endif %}{% endfor -%}
+{%- set top = ns.max if ns.max > 0 else 1 -%}
+{%- set W, H, L, B, T = 720, 170, 34, 26, 10 -%}
+{%- set n = daily|length -%}
+{%- set slot = (W - L) / (n if n else 1) -%}
+{%- set bw = slot * 0.62 -%}
+{%- set ih = H - B - T -%}
+{%- set step = _tick_step(n)|int -%}
+<svg viewBox="0 0 {{ W }} {{ H }}" role="group" aria-label="{{ label }}，共 {{ n }} 天">
+  <line class="grid-line" x1="{{ L }}" x2="{{ W }}" y1="{{ T }}" y2="{{ T }}"/><text class="ylabel" x="{{ L - 8 }}" y="{{ T + 4 }}">{{ top|round(1)|credit }}</text>
+  {% for d in daily %}
+  {%- set x = L + slot * loop.index0 + (slot - bw) / 2 -%}
+  {%- set h = ih * (d.credits|float) / top -%}
+  <g class="col" tabindex="0" role="img" aria-label="{{ d.day }}：消耗 {{ d.credits|credit }} 积分">
+    <title>{{ d.day }} · {{ d.credits|credit }} 积分</title>
+    <rect class="hit" x="{{ L + slot * loop.index0 }}" y="{{ T }}" width="{{ slot }}" height="{{ ih }}"/>
+    {% if h > 0 %}<rect class="bar-c" x="{{ x }}" y="{{ T + ih - (h if h > 1.5 else 1.5) }}" width="{{ bw }}" height="{{ h if h > 1.5 else 1.5 }}" rx="2"/>{% endif %}
+    {% if loop.index0 % step == 0 or loop.last %}<text class="tick" x="{{ x + bw / 2 }}" y="{{ H - 6 }}">{{ d.day[5:] }}</text>{% endif %}
+  </g>
+  {% endfor %}
+  <line class="baseline" x1="{{ L }}" x2="{{ W }}" y1="{{ T + ih }}" y2="{{ T + ih }}"/>
+</svg>
+{%- endmacro %}
+
+{% macro track(value, total) -%}
+{%- set pct = (100 * value / total) if total else 0 -%}
+<span class="track" aria-hidden="true"><svg viewBox="0 0 100 6" preserveAspectRatio="none"><rect class="bg" width="100" height="6" rx="3"/>{% if pct > 0 %}<rect class="fg" width="{{ pct if pct > 1.5 else 1.5 }}" height="6" rx="3"/>{% endif %}</svg></span>
+{%- endmacro %}
+
+{% macro breakdown(rows, kind, total) -%}
+{% if rows %}
+<ul class="breakdown">
+  {% for row in rows %}
+  {%- set fam = line_for(row.model).family if kind == 'model' and row.model else 'other' -%}
+  <li data-line="{{ fam }}">
+    <span class="who">{% if kind == 'model' %}{% if row.model %}{{ roundel(row.model, 'sm') }}{% endif %}<span>{{ row.name }}</span>{% else %}<span class="mini-stub" aria-hidden="true"></span><span>{{ row.name }}</span>{% if row.key_prefix %}<code>{{ row.key_prefix }}</code>{% endif %}{% endif %}</span>
+    <span class="fig">{{ row.requests }} 次<small>{{ row.credits|credit }} 积分</small></span>
+    {{ track(row.requests, total) }}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="chart-empty"><p>这段时间还没有调用。</p></div>
+{% endif %}
+{%- endmacro %}
+
+{% macro days_switch(current, base) -%}
+<nav class="segmented" aria-label="统计范围">{% for d in (7, 14, 30) %}<a href="{{ base }}?days={{ d }}" {% if current == d %}aria-current="page"{% endif %}>{{ d }} 天</a>{% endfor %}</nav>
+{%- endmacro %}

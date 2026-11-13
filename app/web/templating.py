@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import settings
 from app.model_lines import line_for
+from app.image_input import image_input_enabled
 
 WEB_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_DIR / "static"
@@ -82,8 +83,23 @@ def credit(value) -> str:
 templates.env.globals.update(
     asset=asset,
     line_for=line_for,
+    image_input_enabled=image_input_enabled,
     app_name=settings.app_name,
     app_base_url=settings.app_base_url,
     app_authority=settings.app_authority,
 )
-templates.env.filters.update(label=label, tone=tone, utc=utc, credit=credit)
+def device(user_agent) -> str:
+    """Readable "browser · OS" for the account device list; the raw string stays in the title."""
+    text = str(user_agent or "")
+    if not text or text == "未知设备":
+        return "未知设备"
+    browsers = (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"), ("Chrome/", "Chrome"), ("Safari/", "Safari"),
+                ("curl/", "curl"), ("python", "Python"), ("node", "Node.js"))
+    systems = (("iPhone", "iOS"), ("iPad", "iPadOS"), ("Android", "Android"), ("Mac OS X", "macOS"), ("Macintosh", "macOS"),
+               ("Windows", "Windows"), ("CrOS", "ChromeOS"), ("Linux", "Linux"))
+    browser = next((name for needle, name in browsers if needle.lower() in text.lower()), "浏览器")
+    system = next((name for needle, name in systems if needle in text), "")
+    return f"{browser} · {system}" if system else browser
+
+
+templates.env.filters.update(label=label, tone=tone, utc=utc, credit=credit, device=device)

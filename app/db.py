@@ -94,6 +94,43 @@ CREATE TABLE IF NOT EXISTS verification_email_limits (
     last_sent_at TEXT NOT NULL,
     send_count INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS catalog_seed_state (
+    seed_name TEXT PRIMARY KEY,
+    seeded_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT,
+    user_agent TEXT,
+    ip_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id, revoked_at, expires_at);
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
+CREATE TABLE IF NOT EXISTS password_reset_limits (
+    bucket_hash TEXT PRIMARY KEY,
+    window_started_at TEXT NOT NULL,
+    last_sent_at TEXT NOT NULL,
+    send_count INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS password_reset_attempts (
+    bucket_hash TEXT PRIMARY KEY,
+    window_started_at INTEGER NOT NULL,
+    attempt_count INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_attempts_window ON password_reset_attempts(window_started_at);
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -189,9 +226,15 @@ CREATE TABLE IF NOT EXISTS api_key_models (
 
 def connect() -> sqlite3.Connection:
     ensure_dirs()
+    return connect_database(settings.database_path)
+
+
+def connect_database(path: str | Path, *, require_exists: bool = False) -> sqlite3.Connection:
+    if require_exists and not Path(path).exists():
+        raise RuntimeError(f"Database not found: {path}")
     # A short busy timeout lets concurrent reservation transactions queue
     # briefly.  The gateway still closes this connection before any HTTP I/O.
-    conn = sqlite3.connect(settings.database_path, timeout=30.0)
+    conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -205,10 +248,10 @@ def init_db() -> None:
         conn.execute("BEGIN IMMEDIATE")
         _ensure_columns(conn)
         # Local import avoids coupling the accounting module to connection setup.
-        from app.credit_ledger import initialize_credit_schema, recover_stale_holds
+        from app.credit_ledger import initialize_credit_schema, recover_stale_usage
         initialize_credit_schema(conn)
-        recover_stale_holds(conn)
         conn.commit()
+        recover_stale_usage(conn, force=True)
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
@@ -226,6 +269,7 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             "model_policy": "ALTER TABLE api_keys ADD COLUMN model_policy TEXT NOT NULL DEFAULT 'all'",
         },
         "api_usage_logs": {
+            "dispatch_state": "ALTER TABLE api_usage_logs ADD COLUMN dispatch_state TEXT",
             "request_id": "ALTER TABLE api_usage_logs ADD COLUMN request_id TEXT",
             "protocol": "ALTER TABLE api_usage_logs ADD COLUMN protocol TEXT",
             "model": "ALTER TABLE api_usage_logs ADD COLUMN model TEXT",
@@ -261,4 +305,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_status ON api_keys(key_prefix, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_key_started ON api_usage_logs(api_key_id, started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_user_started ON api_usage_logs(user_id, started_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_route_created ON api_usage_logs(route_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_user_created ON api_usage_logs(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_request_id ON api_usage_logs(request_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_effective_at ON api_usage_logs(COALESCE(started_at, created_at))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_usage_user_effective_at ON api_usage_logs(user_id, COALESCE(started_at, created_at))")

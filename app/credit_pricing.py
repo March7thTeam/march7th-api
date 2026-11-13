@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 import posixpath
+from app.image_input import IMAGE_INPUT_TOKEN_CEILING, image_safe_bytes, validate_image_inputs
 
 PRICE_DATA = json.loads(Path(__file__).with_name("credit_prices.json").read_text(encoding="utf-8"))
 UNITS_PER_CREDIT = 1_000_000
@@ -71,17 +72,19 @@ def _aliased_count(mapping: dict, first: str, second: str) -> int:
     return values[0]
 
 
-def _reject_nontext(value: Any) -> None:
+def _reject_nontext(value: Any, image_parts: set[int] | None = None) -> None:
     if isinstance(value, dict):
+        if image_parts and id(value) in image_parts:
+            return
         if value.get("type") in {"item_reference", "image_url", "input_image", "input_file", "input_audio", "file", "audio", "image", "computer", "computer_use_preview", "image_generation", "web_search", "web_search_preview", "file_search", "code_interpreter", "mcp", "shell"}:
             raise PricingError("billing_shape_unsupported", "Built-in tools, files, images and audio require separate pricing and are not enabled for credit billing.")
         if "prompt_cache_breakpoint" in value:
             raise PricingError("billing_shape_unsupported", "Explicit cache breakpoints are not currently supported by this gateway.")
         for child in value.values():
-            _reject_nontext(child)
+            _reject_nontext(child, image_parts)
     elif isinstance(value, list):
         for child in value:
-            _reject_nontext(child)
+            _reject_nontext(child, image_parts)
 
 
 def output_limit_requested(payload: Any, *, protocol: str) -> bool:
@@ -96,7 +99,8 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
     card = model_price(payload["model"])
     # Copy through JSON: neither the caller nor the quote may mutate after admission.
     outgoing = json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False))
-    _reject_nontext(outgoing)
+    images = validate_image_inputs(outgoing, protocol)
+    _reject_nontext(outgoing, {id(part) for part in images})
     if outgoing.get("prompt") or outgoing.get("background") or outgoing.get("previous_response_id") or outgoing.get("conversation") or outgoing.get("context_management") or outgoing.get("multi_agent") or outgoing.get("delegation"):
         raise PricingError("billing_shape_unsupported", "Background generation and server-side conversation references are not enabled for credit billing. Send the text context explicitly.")
     if outgoing.get("modalities", ["text"]) != ["text"] or outgoing.get("audio"):
@@ -129,11 +133,11 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
         outgoing["store"] = False
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_OUTPUT_TOKENS:
         raise PricingError("billing_limit_invalid", f"The output token limit must be between 1 and {MAX_OUTPUT_TOKENS}.")
-    encoded = json.dumps(outgoing, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+    encoded = image_safe_bytes(outgoing) if images else json.dumps(outgoing, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
     # Every text token contains at least one UTF-8 byte. Reserve additional framing
     # headroom. An unexpected upstream expansion is held for review, never capped
     # into a silently understated charge.
-    input_bound = len(encoded) + 4096
+    input_bound = len(encoded) + 4096 + len(images) * IMAGE_INPUT_TOKEN_CEILING
     if input_bound > 1_000_000:
         raise PricingError("billing_shape_unsupported", "The request exceeds the supported text context budget.")
     long = bool(card["long_context_threshold"] and input_bound > card["long_context_threshold"])
@@ -143,6 +147,8 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
     units = int(((input_bound * input_rate + limit * output_rate) * CREDITS_PER_USD).to_integral_value(rounding=ROUND_CEILING))
     snapshot = {"version": PRICE_DATA["version"], "source": PRICE_DATA["source"], "model": payload["model"], "card": card,
                 "credits_per_usd": CREDITS_PER_USD, "input_bound": input_bound, "output_bound": limit}
+    if images:
+        snapshot.update(images=len(images), image_token_ceiling=IMAGE_INPUT_TOKEN_CEILING)
     return outgoing, BillingQuote(units, json.dumps(snapshot, separators=(",", ":")))
 
 

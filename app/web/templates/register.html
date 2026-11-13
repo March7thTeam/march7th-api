@@ -5,8 +5,8 @@
   <section class="gate-story">
     <p class="eyebrow">Boarding · 上车</p>
     <h1>办一张票，<br>换乘任意线路。</h1>
-    <p class="lead">注册后立即启用，登录即可领取个人 AI API 密钥；兑换积分后开始调用，无需等待人工审核。</p>
-    <ol class="steps-mini"><li>01 注册</li><li>02 领取密钥</li><li>03 兑换积分</li><li>04 开始调用</li></ol>
+    <p class="lead">注册后立即可用，无需人工审核。领取密钥、兑换积分，就能用 OpenAI 兼容方式调用全部已计价模型。</p>
+    <ol class="steps-mini"><li>01 注册</li><li>02 领取密钥</li><li>03 获取积分并调用</li></ol>
     <div class="pass" aria-hidden="true">
       <div class="main">
         <div class="route"><span>注册</span><span class="arrow"></span><span>第一次调用</span></div>
@@ -16,19 +16,25 @@
     </div>
   </section>
   <section class="gate-card">
+    {% if submitted %}
+    <div class="result-mark" aria-hidden="true">✓</div>
+    <h2>注册申请已提交</h2>
+    <div class="notice success" role="status">{{ message or '如注册信息可用，账户已创建，可直接登录。' }}</div>
+    <a class="btn primary block" href="/login">前往登录 <span class="arrow" aria-hidden="true">→</span></a>
+    {% else %}
     <h2>注册账户</h2>
-    <p class="desc">填写账户信息，使用场景可选。</p>
+    <p class="desc">几秒完成，使用场景可以不填。</p>
     {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
-    {% if message %}<div class="notice success" role="status">{{ message }}</div>{% elif submitted %}<div class="notice success" role="status">如注册信息可用，账户已创建，可直接登录。邮箱验证不影响使用。</div>{% endif %}
     <form method="post" action="/register" class="form">
-      <label class="field" for="username">用户名<input id="username" name="username" type="text" autocomplete="username" maxlength="64" required></label>
-      <label class="field" for="email">邮箱<input id="email" name="email" type="email" autocomplete="email" required><small>用于接收一次性验证链接；邮箱验证不影响账户使用。</small></label>
+      <label class="field" for="username">用户名<input id="username" name="username" type="text" autocomplete="username" maxlength="64" required autofocus></label>
+      <label class="field" for="email">邮箱<input id="email" name="email" type="email" autocomplete="email" required><small>用于验证和找回密码；验证与否不影响使用。</small></label>
       <label class="field" for="password">密码<span class="password-field"><input id="password" name="password" type="password" minlength="10" autocomplete="new-password" required><button type="button" class="password-toggle" aria-controls="password" aria-pressed="false" aria-label="切换密码可见性">显示</button></span><small>至少 10 个字符。</small></label>
       <label class="field" for="confirm-password">确认密码<input id="confirm-password" name="confirm_password" type="password" minlength="10" autocomplete="new-password" required></label>
       <label class="field" for="usage-reason">使用场景（可选）<textarea id="usage-reason" name="usage_reason" rows="2" maxlength="2000" placeholder="例如：AIRI 桌面伴侣、博客摘要脚本"></textarea></label>
-      <button type="submit" class="btn primary block">注册账户 <span class="arrow" aria-hidden="true">→</span></button>
+      <button type="submit" class="btn primary block" data-busy="正在注册…">注册账户 <span class="arrow" aria-hidden="true">→</span></button>
     </form>
-    <div class="foot">已经有账户？<a href="/login">登录</a></div>
+    {% endif %}
+    <div class="foot"><span>已经有账户？<a href="/login">登录</a></span></div>
   </section>
 </div>
 {% endblock %}

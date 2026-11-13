@@ -1,3 +1,4 @@
+from contextlib import closing
 from app.config import settings, secret_status
 from app.db import connect, init_db
 from app.auth import hash_password
@@ -44,7 +45,8 @@ DEFAULT_PUBLIC_ROUTES = [
 def seed() -> None:
     init_db()
     now = now_iso()
-    with connect() as conn:
+    with closing(connect()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
         legacy_api = conn.execute("SELECT id FROM apis WHERE slug='cliproxy'").fetchone()
         current_api = conn.execute("SELECT id FROM apis WHERE slug='codexproxy'").fetchone()
         if legacy_api and not current_api:
@@ -60,37 +62,18 @@ def seed() -> None:
                 (now, legacy_secret["id"]),
             )
         for item in DEFAULT_APIS:
-            existing = conn.execute("SELECT id FROM apis WHERE slug = ?", (item["slug"],)).fetchone()
-            if existing:
-                api_id = existing["id"]
-                conn.execute(
-                    """
-                    UPDATE apis SET name = ?, base_url = ?, auth_type = ?, secret_ref = ?,
-                    description = ?, tags = ?, updated_at = ? WHERE id = ?
-                    """,
-                    (item["name"], item["base_url"], item["auth_type"], item["secret_ref"],
-                     item["description"], item["tags"], now, api_id),
-                )
-            else:
-                cur = conn.execute(
-                    """
-                    INSERT INTO apis(name, slug, base_url, auth_type, secret_ref, description, tags, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                    """,
-                    (item["name"], item["slug"], item["base_url"], item["auth_type"], item["secret_ref"],
-                     item["description"], item["tags"], now, now),
-                )
-                api_id = cur.lastrowid
-            for name, method, path in item["endpoints"]:
-                row = conn.execute("SELECT id FROM endpoints WHERE api_id = ? AND method = ? AND path = ?", (api_id, method, path)).fetchone()
-                if not row:
-                    conn.execute(
-                        """
-                        INSERT INTO endpoints(api_id, name, method, path, description, default_headers, default_query, default_body, enabled, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, '', '{}', '{}', '', 1, ?, ?)
-                        """,
-                        (api_id, name, method, path, now, now),
-                    )
+            seed_name = "api:" + item["slug"]
+            if conn.execute("SELECT 1 FROM catalog_seed_state WHERE seed_name=?", (seed_name,)).fetchone():
+                continue
+            existing = conn.execute("SELECT id FROM apis WHERE slug=?", (item["slug"],)).fetchone()
+            if not existing:
+                api_id = conn.execute("""INSERT INTO apis(name,slug,base_url,auth_type,secret_ref,description,tags,enabled,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,1,?,?)""", (item["name"],item["slug"],item["base_url"],item["auth_type"],item["secret_ref"],item["description"],item["tags"],now,now)).lastrowid
+                conn.executemany("""INSERT INTO endpoints(api_id,name,method,path,description,default_headers,default_query,default_body,enabled,created_at,updated_at)
+                    VALUES (?,?,?,?,'','{}','{}','',1,?,?)""", [(api_id,name,method,path,now,now) for name,method,path in item["endpoints"]])
+            # Existing installations already own their catalog. Seed once and
+            # never overwrite edits or recreate deliberately removed endpoints.
+            conn.execute("INSERT INTO catalog_seed_state(seed_name,seeded_at) VALUES (?,?)", (seed_name,now))
         for name, key in DEFAULT_SECRETS:
             status = secret_status(key)
             existing = conn.execute("SELECT id FROM secrets WHERE key = ?", (key,)).fetchone()
@@ -120,26 +103,13 @@ def seed() -> None:
             api_id = api_ids.get(slug)
             if not api_id:
                 continue
-            row = conn.execute("SELECT id FROM public_gateway_routes WHERE public_path = ?", (public_path,)).fetchone()
-            if not row:
-                conn.execute(
-                    """
-                    INSERT INTO public_gateway_routes(name, public_path, target_api_id, target_endpoint_id, target_method,
-                    target_path, required_scope, enabled, public_docs, allow_anonymous, created_at, updated_at)
-                    VALUES (?, ?, ?, NULL, ?, ?, ?, 0, 1, 0, ?, ?)
-                    """,
-                    (name, public_path, api_id, method, target_path, scope, now, now),
-                )
-            else:
-                conn.execute(
-                    """
-                    UPDATE public_gateway_routes
-                    SET name=?, target_api_id=?, target_method=?, target_path=?,
-                    required_scope=?, public_docs=1, allow_anonymous=0, updated_at=?
-                    WHERE public_path=?
-                    """,
-                    (name, api_id, method, target_path, scope, now, public_path),
-                )
+            seed_name = "route:" + public_path
+            if conn.execute("SELECT 1 FROM catalog_seed_state WHERE seed_name=?", (seed_name,)).fetchone():
+                continue
+            conn.execute("""INSERT OR IGNORE INTO public_gateway_routes(name,public_path,target_api_id,target_endpoint_id,target_method,
+                target_path,required_scope,enabled,public_docs,allow_anonymous,created_at,updated_at)
+                VALUES (?,?,?,NULL,?,?,?,0,1,0,?,?)""", (name,public_path,api_id,method,target_path,scope,now,now))
+            conn.execute("INSERT INTO catalog_seed_state(seed_name,seeded_at) VALUES (?,?)", (seed_name,now))
         conn.commit()
 
 

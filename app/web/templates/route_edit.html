@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}编辑路由 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Branch lines · 公开路由</p><h1>编辑「{{ route.name }}」</h1><p class="lead">对外地址 <code>/api/public/v1/{{ route.public_path }}</code>。保存后立即生效。</p></div><div class="actions"><a class="btn ghost" href="/admin/routes">← 返回列表</a></div></div>
+<section class="card narrow-card">
+  <form class="form two" method="post" action="/admin/routes/{{ route.id }}/edit">
+    <label class="field">名称<input name="name" value="{{ route.name }}" maxlength="120" required></label>
+    <label class="field">公开路径<input name="public_path" class="mono" value="{{ route.public_path }}" pattern="[a-z0-9._~\-]+(/[a-z0-9._~\-]+)*" required><small>挂在 /api/public/v1/ 之下，必须唯一。</small></label>
+    <label class="field">上游 API<select name="target_api_id">{% for api in apis %}<option value="{{ api.id }}" {% if api.id == route.target_api_id %}selected{% endif %}>{{ api.name }} · {{ api.base_url }}</option>{% endfor %}</select></label>
+    <label class="field">关联端点（可选）<select name="target_endpoint_id"><option value="">无</option>{% for endpoint in endpoints %}<option value="{{ endpoint.id }}" {% if endpoint.id == route.target_endpoint_id %}selected{% endif %}>API #{{ endpoint.api_id }} · {{ endpoint.name }}</option>{% endfor %}</select></label>
+    <label class="field">方法<select name="target_method">{% for method in methods %}<option {% if method == route.target_method %}selected{% endif %}>{{ method }}</option>{% endfor %}</select></label>
+    <label class="field">上游路径<input name="target_path" class="mono" value="{{ route.target_path }}" pattern="/.*" required><small>以 / 开头，不含协议和主机。</small></label>
+    <label class="field wide">所需权限（scope）<input name="required_scope" class="mono" value="{{ route.required_scope or '' }}" placeholder="name:action"><small>调用方的密钥必须精确拥有这个 scope；允许匿名时可留空。</small></label>
+    <fieldset class="wide"><legend>开关</legend><div class="checks">{% for field, label in [('enabled','启用'),('public_docs','在公开文档显示'),('allow_anonymous','允许匿名访问')] %}<label class="check"><input type="checkbox" name="{{ field }}" {% if route[field] %}checked{% endif %}> {{ label }}</label>{% endfor %}</div></fieldset>
+    <div class="actions wide"><button class="btn primary" type="submit" data-busy="保存中…">保存修改</button><a class="btn" href="/admin/routes">取消</a></div>
+  </form>
+</section>
+<section class="card narrow-card section-gap">
+  <div class="split">
+    <div><h2>复制或删除</h2><p class="muted small">复制会生成一条停用的新路由，路径自动加后缀。已有调用记录的路由不能删除，只能停用。</p></div>
+    <div class="actions">
+      <form method="post" action="/admin/routes/{{ route.id }}/copy"><button class="btn" type="submit" data-busy="复制中…">复制为新路由</button></form>
+      <form method="post" action="/admin/routes/{{ route.id }}/delete" data-confirm="永久删除「{{ route.name }}」？此操作无法撤销。"><button class="btn danger" type="submit">删除路由</button></form>
+    </div>
+  </div>
+</section>
+{% endblock %}

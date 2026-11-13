@@ -1,21 +1,41 @@
 {% extends "base.html" %}
+{% from "_macros.html" import daily_bars, breakdown %}
 {% block title %}管理概览 · {{ app_name }}{% endblock %}
 {% block content %}
-<div class="page-head"><div><p class="eyebrow">Control room · 管理</p><h1>管理概览</h1><p class="lead">账户、密钥、积分与网关路由的运行情况。</p></div><div class="actions"><a class="btn" href="/admin/credits">积分运营</a><a class="btn ghost" href="/status">服务状态</a></div></div>
-<div class="grid three">
-  <a class="card metric card-link" href="/admin/users"><span class="label">注册用户</span><span class="value">{{ stats.users }}</span><span class="hint">注册即启用 · 管理账户状态 →</span></a>
-  <a class="card metric card-link" href="/admin/key-requests"><span class="label">待审核密钥申请</span><span class="value">{{ stats.key_requests }}</span><span class="hint">业务权限申请 →</span></a>
-  <a class="card metric card-link" href="/admin/logs"><span class="label">今日网关调用</span><span class="value">{{ stats.calls_today }}</span><span class="hint">AI 与业务接口合计 →</span></a>
+{% set t = analytics.totals %}
+{% set finished = t.succeeded + t.failed %}
+<div class="page-head"><div><p class="eyebrow">Control room · 管理</p><h1>管理概览</h1><p class="lead">账户、密钥、积分与网关的运行情况。数字为 UTC 近 14 天。</p></div><div class="actions"><a class="btn" href="/admin/credits">积分运营</a><a class="btn ghost" href="/status">服务状态</a></div></div>
+
+{% if stats.reconciliation %}
+<div class="notice warn row"><div><strong>{{ stats.reconciliation }} 笔调用等待核账</strong><p>这些请求缺少可靠用量或超出冻结额度，已冻结的积分不会自动结算。</p></div><a class="btn sm" href="/admin/credits">去处理</a></div>
+{% endif %}
+
+<div class="tiles">
+  <a class="tile" href="/admin/users"><span class="label">注册用户 <span aria-hidden="true">→</span></span><span class="value">{{ stats.users }}</span><span class="hint">有效密钥 {{ stats.active_keys }} 把</span></a>
+  <a class="tile" href="/admin/ai-usage"><span class="label">近 14 天请求 <span aria-hidden="true">→</span></span><span class="value">{{ '{:,}'.format(t.requests) }}</span><span class="hint">今日网关调用 {{ stats.calls_today }}</span></a>
+  <div class="tile"><span class="label">成功率</span><span class="value">{% if finished %}{{ (100 * t.succeeded / finished)|round(1) }}<small>%</small>{% else %}—{% endif %}</span><span class="hint">失败 {{ t.failed }}{% if t.in_flight %} · 进行中 {{ t.in_flight }}{% endif %}</span></div>
+  <div class="tile fare-card"><span class="label">已结算积分</span><span class="value">{{ t.credits|credit }}</span><span class="hint">≈ ¥{{ ((t.credits|float) / 100)|round(2) }}</span></div>
 </div>
+
+<div class="grid wide-left section-gap">
+  <section class="card flush chart-card">
+    <div class="card-head"><div><h2>全站每日请求</h2><p>UTC {{ analytics.start_date }} – {{ analytics.end_date }}</p></div><div class="chart-legend"><span><i class="key" aria-hidden="true"></i>成功</span><span><i class="key fail" aria-hidden="true"></i>失败</span></div></div>
+    {% if t.requests %}<div class="chart">{{ daily_bars(analytics.daily) }}</div>{% else %}<div class="chart-empty"><p>近 14 天没有调用。</p></div>{% endif %}
+    <div class="card-foot"><span>按用户、模型与扣费的明细</span><a class="text-link" href="/admin/ai-usage">全站用量</a></div>
+  </section>
+  <section class="card flush"><div class="card-head"><h2>热门模型</h2><a class="text-link" href="/admin/ai-usage">更多</a></div>{{ breakdown(analytics.by_model[:5], 'model', t.requests) }}</section>
+</div>
+
 <div class="grid four section-gap admin-links">
-  <a class="card card-link" href="/admin/api-keys"><h3>全部密钥</h3><p class="muted small">权限、模型策略、配额与撤销。</p></a>
-  <a class="card card-link" href="/admin/ai-usage"><h3>全站 AI 用量</h3><p class="muted small">请求结果、token 与扣费。</p></a>
-  <a class="card card-link" href="/admin/routes"><h3>公共路由</h3><p class="muted small">启用或停用业务接口。</p></a>
+  <a class="card card-link" href="/admin/key-requests"><h3>密钥申请 {% if stats.key_requests %}<span class="badge warn">{{ stats.key_requests }} 待审</span>{% endif %}</h3><p class="muted small">业务接口权限的人工审批。</p></a>
+  <a class="card card-link" href="/admin/api-keys"><h3>全部密钥</h3><p class="muted small">模型策略、频率、额度与撤销。</p></a>
+  <a class="card card-link" href="/admin/routes"><h3>公开路由</h3><p class="muted small">新增、编辑、复制和停用业务接口。</p></a>
   <a class="card card-link" href="/settings"><h3>系统设置</h3><p class="muted small">配置状态，不展示敏感值。</p></a>
 </div>
+
 <div class="block-title section-gap"><h2>最近网关调用</h2><a class="text-link" href="/admin/logs">全部记录</a></div>
 <div class="card flush"><div class="table-wrap"><table>
-  <thead><tr><th>时间（UTC）</th><th>方法</th><th>模型 / 接口</th><th>状态</th><th class="right">耗时</th></tr></thead>
-  <tbody>{% for log in recent %}<tr><td class="num">{{ log.created_at|utc }}</td><td><span class="method {{ log.method|lower }}">{{ log.method }}</span></td><td><code>{{ log.model or log.public_path }}</code></td><td class="num">{{ log.status_code or '—' }}</td><td class="num right">{{ log.response_time_ms if log.response_time_ms is not none else '—' }} ms</td></tr>{% else %}<tr><td colspan="5" class="empty">尚无调用记录。</td></tr>{% endfor %}</tbody>
+  <thead><tr><th>时间（UTC）</th><th>方法</th><th>模型 / 接口</th><th class="right">HTTP</th><th class="right">耗时</th></tr></thead>
+  <tbody>{% for log in recent %}<tr><td class="num">{{ log.created_at|utc }}</td><td><span class="method {{ log.method|lower }}">{{ log.method }}</span></td><td><code>{{ log.model or log.public_path }}</code></td><td class="num right">{{ log.status_code or '—' }}</td><td class="num right">{{ log.response_time_ms if log.response_time_ms is not none else '—' }} ms</td></tr>{% else %}<tr><td colspan="5" class="empty">尚无调用记录。</td></tr>{% endfor %}</tbody>
 </table></div></div>
 {% endblock %}

@@ -19,6 +19,42 @@ from app.db import connect
 WINDOW_SECONDS = 15 * 60
 MAX_FAILURES_PER_ACCOUNT = 8
 MAX_FAILURES_PER_SOURCE = 40
+RESET_WINDOW_SECONDS = 15 * 60
+MAX_RESET_ATTEMPTS_PER_SOURCE = 40
+MAX_RESET_ATTEMPTS_PER_TOKEN = 8
+
+
+def claim_password_reset_attempt(
+    token_hash: str, source_ip: str | None, *, verified: bool = True, valid_token: bool = False,
+) -> int:
+    """Count token attempts and invalid attempts from verified sources atomically.
+
+    Valid tokens use only their own bucket. An unverified shared hop cannot
+    block other visitors. Only digests are persisted.
+    """
+    now = int(time.time())
+    buckets = [(_digest("reset-token", token_hash), MAX_RESET_ATTEMPTS_PER_TOKEN)]
+    if verified and not valid_token:
+        buckets.append((_digest("reset-source", source_ip or "-"), MAX_RESET_ATTEMPTS_PER_SOURCE))
+    with closing(connect()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        plan = []
+        retry_after = 0
+        for bucket, limit in buckets:
+            row = conn.execute("SELECT window_started_at, attempt_count FROM password_reset_attempts WHERE bucket_hash=?",
+                               (bucket,)).fetchone()
+            live = row is not None and now - row["window_started_at"] < RESET_WINDOW_SECONDS
+            if live and row["attempt_count"] >= limit:
+                retry_after = max(retry_after, row["window_started_at"] + RESET_WINDOW_SECONDS - now)
+            plan.append((bucket, row["window_started_at"] if live else now, row["attempt_count"] + 1 if live else 1))
+        if retry_after:
+            return retry_after
+        for bucket, window, count in plan:
+            conn.execute("""INSERT INTO password_reset_attempts(bucket_hash,window_started_at,attempt_count) VALUES (?,?,?)
+                ON CONFLICT(bucket_hash) DO UPDATE SET window_started_at=excluded.window_started_at,attempt_count=excluded.attempt_count""",
+                (bucket, window, count))
+        conn.execute("DELETE FROM password_reset_attempts WHERE window_started_at<=?", (now - RESET_WINDOW_SECONDS,))
+    return 0
 
 
 def init_login_throttle_schema(conn) -> None:

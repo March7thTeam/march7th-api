@@ -12,10 +12,12 @@ import base64
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,7 @@ from urllib.parse import urlsplit, urlunsplit
 from starlette.concurrency import run_in_threadpool
 
 import httpx
+import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
@@ -30,15 +33,24 @@ from app.ai_usage import (
     QuotaRejection,
     UsageReservation,
     complete_usage,
+    finish_unsent_usage,
     get_key_models,
     insert_usage,
     model_allowed,
+    mark_usage_dispatched,
     quota_rejection,
+    public_route_rejection,
     reserve_usage,
 )
 from app.upstream_security import PinnedTarget, resolve_and_pin_target
 from app.client_ip import client_address
 from app.http_clients import public_upstream_client
+from functools import partial
+from app.utils.timefmt import now_iso as _now_iso
+now_iso = partial(_now_iso, timespec="microseconds")
+from app.utils.errors import json_error
+from app.utils.redact import SENSITIVE_WORDS, gateway_redact_text as redact_text, redact_json_like
+from app.db import connect_database
 
 
 router = APIRouter()
@@ -48,20 +60,6 @@ MAX_RESPONSE_BYTES = 100 * 1024 * 1024
 
 class ResponseTooLarge(Exception):
     pass
-
-SENSITIVE_WORDS = [
-    "token",
-    "password",
-    "secret",
-    "key",
-    "cookie",
-    "authorization",
-    "credential",
-    "api_key",
-    "access_token",
-    "refresh_token",
-    "bearer",
-]
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -86,23 +84,12 @@ REQUEST_HEADER_ALLOWLIST = {
 }
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def get_db_path() -> str:
     return os.getenv("DATABASE_PATH", "/app/data/luomoapi.db")
 
 
 def connect() -> sqlite3.Connection:
-    db_path = get_db_path()
-    if not Path(db_path).exists():
-        raise RuntimeError(f"Database not found: {db_path}")
-    conn = sqlite3.connect(db_path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    return connect_database(get_db_path(), require_exists=True)
 
 
 def _row_value(row: Any, name: str, default: Any = None) -> Any:
@@ -135,43 +122,6 @@ def key_expired(key_row: Any, at: datetime | None = None) -> bool:
     return expires_at is not None and expires_at <= (at or datetime.now(timezone.utc))
 
 
-def redact_text(value: Any, limit: int = 1000) -> str:
-    if value is None:
-        return ""
-    text = str(value)
-    if any(word in text.lower() for word in SENSITIVE_WORDS):
-        return "********"
-    if len(text) > limit:
-        return text[:limit] + "...[truncated]"
-    return text
-
-
-def redact_json_like(value: Any, limit: int = 1000) -> str:
-    try:
-        if isinstance(value, (dict, list)):
-            def scrub(obj: Any) -> Any:
-                if isinstance(obj, dict):
-                    out: dict[Any, Any] = {}
-                    for key, child in obj.items():
-                        if any(word in str(key).lower() for word in SENSITIVE_WORDS):
-                            out[key] = "********"
-                        else:
-                            out[key] = scrub(child)
-                    return out
-                if isinstance(obj, list):
-                    return [scrub(item) for item in obj[:20]]
-                if isinstance(obj, str):
-                    return redact_text(obj, limit=300)
-                return obj
-
-            text = json.dumps(scrub(value), ensure_ascii=False)
-        else:
-            text = str(value)
-        return text if len(text) <= limit else text[:limit] + "...[truncated]"
-    except Exception:
-        return "[unserializable]"
-
-
 def request_id_for(request: Request) -> str:
     value = request.headers.get("x-request-id", "").strip()
     # Keep a caller supplied ID useful for tracing but prevent header injection
@@ -179,17 +129,6 @@ def request_id_for(request: Request) -> str:
     if value and len(value) <= 128 and all(ord(char) >= 0x20 and ord(char) != 0x7F for char in value):
         return value
     return secrets.token_hex(16)
-
-
-def json_error(
-    status_code: int,
-    error: str,
-    message: str,
-    *,
-    request_id: str | None = None,
-) -> JSONResponse:
-    headers = {"X-Request-ID": request_id} if request_id else None
-    return JSONResponse(status_code=status_code, content={"error": error, "message": message}, headers=headers)
 
 
 def extract_api_key(request: Request) -> str | None:
@@ -338,6 +277,7 @@ def log_usage(
     output_tokens: int | None = None,
     total_tokens: int | None = None,
     usage_reported: bool = False,
+    dispatched: bool | None = None,
 ) -> int | None:
     """Compatibility wrapper for callers that already own a DB connection."""
 
@@ -367,6 +307,7 @@ def log_usage(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         usage_reported=usage_reported,
+        dispatched=dispatched,
         request_preview=redact_text(request_preview or "", 1000),
         response_preview=redact_text(response_preview or "", 1000),
     )
@@ -375,7 +316,8 @@ def log_usage(
 def get_route(conn: sqlite3.Connection, route_path: str) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT r.*, a.base_url, a.auth_type, a.secret_ref
+        SELECT r.*, a.base_url, a.auth_type, a.secret_ref, a.enabled AS upstream_enabled,
+               a.updated_at AS upstream_updated_at
         FROM public_gateway_routes r JOIN apis a ON a.id=r.target_api_id
         WHERE TRIM(r.public_path, '/')=? LIMIT 1
         """,
@@ -474,11 +416,20 @@ def _finalize_or_insert(
     outcome: str,
     error_summary: str | None = None,
     response_preview: str | None = None,
+    billing_release: bool = False,
+    dispatched: bool = True,
 ) -> None:
+    if not dispatched and outcome in {"gateway_error", "upstream_error", "response_too_large"}:
+        outcome = "gateway_error_not_dispatched"
+    if reservation and not dispatched:
+        finish_unsent_usage(connect, reservation, status_code=status_code,
+            response_time_ms=response_time_ms, first_byte_ms=None, success=False,
+            outcome=outcome, error_summary=redact_text(error_summary or "", 500))
+        return
     try:
-        with connect() as conn:
+        with closing(connect()) as conn:
             if reservation:
-                complete_usage(
+                recorded = complete_usage(
                     conn,
                     reservation,
                     status_code=status_code,
@@ -488,9 +439,10 @@ def _finalize_or_insert(
                     outcome=outcome,
                     error_summary=redact_text(error_summary or "", 500),
                     response_preview=redact_text(response_preview or "", 1000),
+                    billing_release=billing_release,
                 )
             else:
-                log_usage(
+                recorded = log_usage(
                     conn,
                     user_id=_row_value(key_row, "user_id"),
                     api_key_id=_row_value(key_row, "id"),
@@ -508,13 +460,19 @@ def _finalize_or_insert(
                     response_preview=response_preview,
                     request_id=request_id,
                     outcome=outcome,
+                    protocol="public",
+                    dispatched=dispatched,
                 )
+            if not recorded:
+                raise RuntimeError("Public usage log could not be committed")
             if key_row is not None:
                 conn.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now_iso(), _row_value(key_row, "id")))
                 conn.commit()
     except Exception:
         # Observability must not turn a completed upstream response into a 500.
-        pass
+        logging.getLogger("luomoapi.usage").exception(
+            "public_usage_finalization_failed request_id=%s route_id=%s",
+            request_id, _row_value(route, "id"))
 
 
 def _load_public_route(route_path: str, method: str, raw_key: str | None):
@@ -525,7 +483,7 @@ def _load_public_route(route_path: str, method: str, raw_key: str | None):
         route = dict(route_row) if route_row else None
         if not route:
             return None, None, (404, "not_found", "Public route not found.")
-        if not int(route.get("enabled") or 0):
+        if not int(route.get("enabled") or 0) or not int(route.get("upstream_enabled") or 0):
             return None, None, (404, "route_disabled", "This route is documented but not currently enabled.")
         if protected_ai_target(str(route.get("base_url") or ""), str(route.get("target_path") or "")):
             return None, None, (403, "credit_gateway_required", "AI generation must use the credit-billed /v1 endpoints.")
@@ -554,6 +512,11 @@ def _load_public_route(route_path: str, method: str, raw_key: str | None):
 def _reserve_public_usage(route: Any, key_row: Any, request_id: str, method: str,
                           route_path: str, client_ip: str | None, user_agent: str | None):
     with connect() as conn:
+        if key_row is None:
+            conn.execute("BEGIN IMMEDIATE")
+            rejection = public_route_rejection(conn, route["id"], route)
+            conn.commit()
+            return None, rejection
         return reserve_usage(
             conn,
             key_row,
@@ -564,10 +527,24 @@ def _reserve_public_usage(route: Any, key_row: Any, request_id: str, method: str
             method=method,
             public_path=route_path,
             route_id=route.get("id"),
+            route_snapshot=route,
             target_url_masked=mask_url(build_target_url(str(route["base_url"]), str(route["target_path"]))),
             client_ip_hash=hash_ip(client_ip),
             user_agent_preview=redact_text(user_agent or "", 300),
         )
+
+
+def _final_public_route_rejection(route: Any, reservation: UsageReservation | None = None) -> QuotaRejection | None:
+    with closing(connect()) as conn:
+        if reservation:
+            # Waiting for the dispatch write lock must precede the last read,
+            # so configuration cannot change while that lock is being acquired.
+            conn.execute("BEGIN IMMEDIATE")
+        rejection = public_route_rejection(conn, route["id"], route)
+        if not rejection and reservation:
+            if mark_usage_dispatched(conn, reservation) is not True:
+                raise RuntimeError("Usage dispatch marker was not committed")
+        return rejection
 
 
 @router.api_route(
@@ -580,6 +557,7 @@ async def public_gateway(route_path: str, request: Request):
     reservation: UsageReservation | None = None
     key_row: Any = None
     route: Any = None
+    dispatched = False
 
     try:
         route, key_row, load_error = await run_in_threadpool(
@@ -604,19 +582,20 @@ async def public_gateway(route_path: str, request: Request):
         except ValueError as exc:
             return json_error(400, "blocked_target", str(exc), request_id=request_id)
 
-        if key_row is not None:
-            reservation, rejection = await run_in_threadpool(
-                _reserve_public_usage,
-                route,
-                key_row,
-                request_id,
-                request.method,
-                route_path,
-                client_address(request),
-                request.headers.get("user-agent"),
-            )
-            if rejection:
-                return _quota_error(rejection, request_id)
+        # Anonymous requests also recheck the catalog after body/DNS work.
+        # Keyed requests do so inside the quota reservation transaction.
+        reservation, rejection = await run_in_threadpool(
+            _reserve_public_usage,
+            route,
+            key_row,
+            request_id,
+            request.method,
+            route_path,
+            client_address(request),
+            request.headers.get("user-agent"),
+        )
+        if rejection:
+            return _quota_error(rejection, request_id)
 
         upstream_headers = allowed_request_headers(request, make_upstream_headers(route))
         try:
@@ -633,6 +612,28 @@ async def public_gateway(route_path: str, request: Request):
                     upstream_request.headers["host"] = pinned.host_header
                 if pinned.sni_hostname:
                     upstream_request.extensions["sni_hostname"] = pinned.sni_hostname
+                # Client acquisition can wait. Recheck immediately before send,
+                # after all DNS, reservation and request construction work.
+                rejection = await run_in_threadpool(_final_public_route_rejection, route, reservation)
+                if rejection:
+                    await run_in_threadpool(
+                        _finalize_or_insert,
+                        reservation,
+                        key_row=key_row,
+                        route=route,
+                        request=request,
+                        request_id=request_id,
+                        status_code=rejection.status_code,
+                        response_time_ms=int((time.monotonic() - started) * 1000),
+                        first_byte_ms=None,
+                        success=False,
+                        outcome=rejection.code,
+                        error_summary=rejection.message,
+                        billing_release=True,
+                        dispatched=False,
+                    )
+                    return _quota_error(rejection, request_id)
+                dispatched = True
                 upstream = await client.send(upstream_request, stream=True)
                 try:
                     response_body = await read_bounded_response(upstream)
@@ -654,6 +655,7 @@ async def public_gateway(route_path: str, request: Request):
                 first_byte_ms=elapsed,
                 success=False,
                 outcome="response_too_large",
+                dispatched=dispatched,
                 error_summary=f"upstream response exceeded {MAX_RESPONSE_BYTES} bytes",
             )
             return json_error(502, "response_too_large", "Upstream response exceeded the configured size limit.", request_id=request_id)
@@ -671,6 +673,7 @@ async def public_gateway(route_path: str, request: Request):
                 first_byte_ms=None,
                 success=False,
                 outcome="upstream_error",
+                dispatched=dispatched,
                 error_summary=type(exc).__name__,
             )
             return json_error(502, "upstream_error", "Upstream API request failed.", request_id=request_id)
@@ -694,9 +697,18 @@ async def public_gateway(route_path: str, request: Request):
         )
         headers["X-Request-ID"] = request_id
         return Response(content=response_body, status_code=status_code, headers=headers)
+    except asyncio.CancelledError:
+        with anyio.CancelScope(shield=True):
+            if reservation:
+                await run_in_threadpool(_finalize_or_insert, reservation, key_row=key_row,
+                    route=route or {}, request=request, request_id=request_id, status_code=None,
+                    response_time_ms=None, first_byte_ms=None, success=False,
+                    outcome="client_disconnect" if dispatched else "gateway_error_not_dispatched",
+                    error_summary="Request cancelled before completion.", dispatched=dispatched)
+        raise
     except Exception:
         elapsed = int((time.monotonic() - started) * 1000)
-        if reservation:
+        if route is not None:
             await run_in_threadpool(
                 _finalize_or_insert,
                 reservation,
@@ -709,6 +721,7 @@ async def public_gateway(route_path: str, request: Request):
                 first_byte_ms=None,
                 success=False,
                 outcome="gateway_error",
+                dispatched=dispatched,
                 error_summary="Gateway failed to process the request.",
             )
         return json_error(500, "gateway_error", "Gateway failed to process the request.", request_id=request_id)
