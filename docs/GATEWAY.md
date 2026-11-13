@@ -188,8 +188,14 @@ catalog listing or a text-only result. `python -m scripts.issue8_contract_probe
 --base-url http://127.0.0.1:8790 --ledger-db /app/data/issue8-candidate.sqlite
 --output /tmp/issue8-results.json` uses `LUOMO_API_KEY` from the environment without
 printing it. It makes real billable requests when run: Responses functions in JSON
-and SSE for gpt5.2/gpt5.5 by default, one expected Chat rejection, and gpt4o-mini Chat
+and SSE for gpt5.2/gpt5.5 by default, one non-streaming Chat tools probe, and gpt4o-mini Chat
 and Responses requests with no explicit output limit (seven requests by default).
+The Chat probe reports `supported_200` only for valid Chat function calls with
+verified model identity and usage, or `guided_rejection_400` for the known structured
+Responses guidance without usage/output evidence. With ledger auditing, success
+requires settled holds and equal expected/charged/actual units; rejection requires
+released holds and zero charged/actual units. This single probe does not add a Chat
+SSE check or a complete Chat tool-verification record.
 The4.1/4.1-mini/4o/4o-mini tool cases omit reasoning; the other reviewed models use
 reasoning.low. External credit/quota/auth blockers appear as environment_blocked
 reasons and still fail acceptance; they never become success verification records. Optional ledger auditing opens only a named isolated DB

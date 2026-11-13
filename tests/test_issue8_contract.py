@@ -233,11 +233,25 @@ class ExactQuotaRejectionTests(unittest.TestCase):
 
 
 class ProbeTests(unittest.TestCase):
-    def api_only_probe(self, transform=None, *, prefix=b'', suffix=b'', transform_defaults=False):
+    @staticmethod
+    def chat_tool_response(model=native.MODEL):
+        return {'id': 'chatcmpl_fixture', 'object': 'chat.completion', 'model': model,
+                'choices': [{'index': 0, 'finish_reason': 'tool_calls', 'message': {
+                    'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'call_fixture',
+                        'type': 'function', 'function': {'name': 'report_ready', 'arguments': '{"ready":true}'}}]}}],
+                'usage': {'prompt_tokens': 61, 'completion_tokens': 14, 'total_tokens': 75}}
+
+    @staticmethod
+    def chat_rejection():
+        return {'error': {'type': 'invalid_request_error', 'code': 'chat_tools_require_responses',
+                          'message': 'Use /v1/responses preserving reasoning and tools.', 'param': None}}
+
+    def api_only_probe(self, transform=None, *, prefix=b'', suffix=b'', transform_defaults=False,
+                       chat_payload=None, chat_status=400, chat_model=native.MODEL, ledger_db=None):
         def handler(request):
             body = json.loads(request.content)
-            if request.url.path.endswith('chat/completions') and body['model'] == native.MODEL:
-                return httpx.Response(400, json={'error': {'code': 'chat_tools_require_responses', 'message': 'Use /v1/responses.'}})
+            if request.url.path.endswith('chat/completions') and body.get('tools'):
+                return httpx.Response(chat_status, json=self.chat_rejection() if chat_payload is None else chat_payload)
             data = native.tool_response(); data['model'] = body['model']
             if transform and (body.get('tools') or transform_defaults):
                 transform(data)
@@ -246,7 +260,150 @@ class ProbeTests(unittest.TestCase):
                 return httpx.Response(200, content=prefix + complete + suffix)
             return httpx.Response(200, json=data)
         with httpx.Client(base_url='http://127.0.0.1', transport=httpx.MockTransport(handler)) as client:
-            return run_contract(client, models=['gpt-5.5'], chat_model=native.MODEL)
+            return run_contract(client, models=['gpt-5.5'], chat_model=chat_model, ledger_db=ledger_db)
+
+    def test_chat_tools_accepts_real_completion_and_reviewed_snapshot_without_chat_badge(self):
+        for requested, actual in [(native.MODEL, native.MODEL), ('gpt-5.5', 'gpt-5.5-2026-04-23')]:
+            with self.subTest(requested=requested, actual=actual):
+                payload = self.chat_tool_response(actual); payload['error'] = None
+                result = self.api_only_probe(chat_payload=payload, chat_status=200, chat_model=requested)
+                row = next(row for row in result['checks'] if row['case'] == 'chat_tools_negative')
+                self.assertTrue(result['passed'])
+                self.assertEqual(row['chat_tools_outcome'], 'supported_200')
+                self.assertTrue(row['tool_call_ok'])
+                self.assertEqual(row['usage'], {'input_tokens': 61, 'output_tokens': 14, 'total_tokens': 75})
+                self.assertEqual(row['actual_model'], actual)
+                self.assertFalse(row['stream'])
+                self.assertTrue(all(record['tool_protocols'] == ['Responses', 'Responses SSE']
+                                    for record in result['verified_tool_records'].values()))
+        with patch.dict(PRICE_DATA, {'version': 'unreviewed-price-version'}):
+            result = self.api_only_probe(chat_payload=self.chat_tool_response('gpt-5.5-2026-04-23'),
+                                         chat_status=200, chat_model='gpt-5.5')
+            self.assertFalse(result['passed'])
+
+    def test_chat_tools_rejects_non_chat_malformed_or_unfinished_tool_calls(self):
+        def message(data): return data['choices'][0]['message']
+        def function(data): return message(data)['tool_calls'][0]['function']
+        transforms = [
+            lambda data: data.update(object='response'),
+            lambda data: data.pop('choices'),
+            lambda data: data.update(choices=[]),
+            lambda data: data['choices'].append('invalid'),
+            lambda data: data['choices'][0].update(finish_reason='stop'),
+            lambda data: data['choices'][0].update(finish_reason='length'),
+            lambda data: data['choices'][0].update(message=None),
+            lambda data: message(data).update(role='user'),
+            lambda data: message(data).pop('tool_calls'),
+            lambda data: message(data).update(tool_calls=[]),
+            lambda data: message(data)['tool_calls'].append({}),
+            lambda data: message(data)['tool_calls'][0].update(type='custom'),
+            lambda data: message(data)['tool_calls'][0].pop('function'),
+            lambda data: function(data).update(name='other_tool'),
+            lambda data: function(data).update(arguments='not-json'),
+            lambda data: function(data).update(arguments={'ready': True}),
+            lambda data: function(data).update(arguments='[]'),
+            lambda data: function(data).update(arguments='{"ready":false}'),
+            lambda data: function(data).update(arguments='{"ready":1}'),
+        ]
+        for index, transform in enumerate(transforms):
+            with self.subTest(index=index):
+                payload = self.chat_tool_response(); transform(payload)
+                result = self.api_only_probe(chat_payload=payload, chat_status=200)
+                row = next(row for row in result['checks'] if row['case'] == 'chat_tools_negative')
+                self.assertFalse(result['passed'])
+                self.assertFalse(row['tool_call_ok'])
+                self.assertIsNone(row['chat_tools_outcome'])
+        self.assertFalse(self.api_only_probe(chat_payload=native.tool_response(), chat_status=200)['passed'])
+
+    def test_chat_tools_success_requires_valid_identity_usage_and_no_error(self):
+        transforms = [lambda data: data.pop('model'), lambda data: data.update(model='gpt-4o-mini'),
+                      lambda data: data.update(model=native.MODEL + '-unreviewed'),
+                      lambda data: data.update(model={'invalid': True}),
+                      lambda data: data.pop('usage'), lambda data: data.update(usage={}),
+                      lambda data: data['usage'].update(prompt_tokens=-1),
+                      lambda data: data['usage'].update(completion_tokens=True),
+                      lambda data: data['usage'].update(total_tokens=999)]
+        transforms += [lambda data, error=error: data.update(error=error)
+                       for error in ({}, [], '', False, {'code': 'credit_balance_exhausted'})]
+        for index, transform in enumerate(transforms):
+            with self.subTest(index=index):
+                payload = self.chat_tool_response(); transform(payload)
+                result = self.api_only_probe(chat_payload=payload, chat_status=200)
+                row = next(row for row in result['checks'] if row['case'] == 'chat_tools_negative')
+                self.assertFalse(row['passed'])
+                self.assertIsNone(row['chat_tools_outcome'])
+        for status in (201, 202, 204, 400, 429, 500, 503):
+            with self.subTest(status=status):
+                self.assertFalse(self.api_only_probe(chat_payload=self.chat_tool_response(), chat_status=status)['passed'])
+
+    def test_chat_tools_known_guidance_is_distinct_and_unknown_errors_fail(self):
+        result = self.api_only_probe()
+        row = next(row for row in result['checks'] if row['case'] == 'chat_tools_negative')
+        self.assertTrue(result['passed'])
+        self.assertEqual(row['chat_tools_outcome'], 'guided_rejection_400')
+        self.assertIsNone(row['usage'])
+        transforms = [lambda data: data.update(error=None),
+                      lambda data: data['error'].pop('type'),
+                      lambda data: data['error'].update(type='server_error'),
+                      lambda data: data['error'].update(code='other_error'),
+                      lambda data: data['error'].update(message='Try again later.'),
+                      lambda data: data['error'].update(message=['/v1/responses']),
+                      lambda data: data['error'].update(message='Use /v1/responses or set reasoning to none.'),
+                      lambda data: data['error'].update(param={})]
+        for index, transform in enumerate(transforms):
+            with self.subTest(index=index):
+                payload = self.chat_rejection(); transform(payload)
+                result = self.api_only_probe(chat_payload=payload)
+                row = next(row for row in result['checks'] if row['case'] == 'chat_tools_negative')
+                self.assertFalse(row['passed'])
+                self.assertIsNone(row['chat_tools_outcome'])
+        for status in (200, 401, 429, 503):
+            with self.subTest(status=status):
+                self.assertFalse(self.api_only_probe(chat_status=status)['passed'])
+
+    def test_chat_tools_rejection_cannot_contain_even_empty_or_nested_generation_evidence(self):
+        for field in ('usage', 'choices', 'output', 'response', 'content', 'data', 'tool_calls', 'function_call'):
+            for value in (None, {}, [], ''):
+                for location in ('top', 'error', 'nested'):
+                    with self.subTest(field=field, value=value, location=location):
+                        payload = self.chat_rejection()
+                        target = payload if location == 'top' else payload['error']
+                        if location == 'nested':
+                            payload['error']['extra'] = [{'detail': {field: value}}]
+                        else:
+                            target[field] = value
+                        result = self.api_only_probe(chat_payload=payload)
+                        self.assertFalse(result['passed'])
+
+    def test_chat_tools_audit_requires_consistent_settlement_or_zero_cost_release(self):
+        settled = {'credit_status': 'settled', 'hold_status': 'settled', 'expected_charge_units': 1,
+                   'credit_charged_units': 1, 'actual_units': 1, 'output_bound': 16384}
+        released = {'credit_status': 'released', 'hold_status': 'released',
+                    'credit_charged_units': 0, 'actual_units': 0}
+        cases = [(200, self.chat_tool_response(), settled, [
+            {'actual_units': 2}, {'credit_charged_units': 2}, {'expected_charge_units': 2},
+            {'actual_units': None}, {'actual_units': True}, {'expected_charge_units': None},
+            {'hold_status': 'held'}, {'credit_status': 'reconciliation_required'},
+            {'expected_charge_units': -1, 'credit_charged_units': -1, 'actual_units': -1}]),
+            (400, self.chat_rejection(), released, [
+            {'actual_units': 1}, {'credit_charged_units': 1}, {'actual_units': None},
+            {'credit_charged_units': False}, {'hold_status': 'held'}, {'hold_status': None},
+            {'credit_status': 'reconciliation_required'}])]
+        for status, payload, valid, failures in cases:
+            for changes in [None, *failures, {'credit_status': None, 'hold_status': None}]:
+                with self.subTest(status=status, changes=changes):
+                    def audit(_path, _id, data, _protocol):
+                        if 'choices' in data or 'error' in data:
+                            return {**valid, **(changes or {})}
+                        return settled
+                    with patch('scripts.issue8_contract_probe._audit', side_effect=audit):
+                        result = self.api_only_probe(chat_payload=payload, chat_status=status,
+                                                     ledger_db=Path('issue8-candidate.sqlite'))
+                    row = next(row for row in result['checks'] if row['case'] == 'chat_tools_negative')
+                    self.assertEqual(result['passed'], changes is None)
+                    self.assertEqual(row['passed'], changes is None)
+                    self.assertEqual(row['chat_tools_outcome'],
+                                     ('supported_200' if status == 200 else 'guided_rejection_400') if changes is None else None)
 
     def test_nonstring_model_and_output_types_fail_without_echoing_objects(self):
         secret = 'fixture-sensitive-api-key'
@@ -359,22 +516,25 @@ class ProbeTests(unittest.TestCase):
         def handler(request):
             body = json.loads(request.content); calls.append((request.url.path, body))
             if request.url.path.endswith('chat/completions') and body['model'] == native.MODEL:
-                return httpx.Response(400, json={'error': {'code': 'chat_tools_require_responses', 'message': 'Use /v1/responses.'}})
+                return httpx.Response(400, json=self.chat_rejection())
             data = native.tool_response(); data['model'] = body['model']
             if body.get('stream'):
                 return httpx.Response(200, content=fixture.sse_event({'type': 'response.completed', 'response': data}))
             return httpx.Response(200, json=data)
         def audit(_path, _id, payload, _protocol):
             if payload.get('error'):
-                return {'credit_status': 'released', 'actual_units': 0}
+                return {'credit_status': 'released', 'hold_status': 'released', 'credit_charged_units': 0, 'actual_units': 0}
             return {'credit_status': 'settled', 'hold_status': 'settled', 'expected_charge_units': 1,
-                    'credit_charged_units': 1, 'output_bound': 16384}
+                    'credit_charged_units': 1, 'actual_units': 1, 'output_bound': 16384}
         models = ['gpt-4.1', 'gpt-4o-mini', 'gpt-5.2', 'gpt-5.5', 'gpt-6-luna', 'gpt-6-astra']
         with httpx.Client(base_url='http://127.0.0.1', transport=httpx.MockTransport(handler)) as client, \
              patch('scripts.issue8_contract_probe._audit', side_effect=audit):
             result = run_contract(client, models=models, chat_model=native.MODEL, ledger_db=Path('issue8-candidate.sqlite'))
         self.assertTrue(result['passed'])
         self.assertEqual(len(result['checks']), 15)
+        chat_tools = [(path, body) for path, body in calls if path.endswith('chat/completions') and body.get('tools')]
+        self.assertEqual(len(chat_tools), 1)
+        self.assertFalse(chat_tools[0][1].get('stream', False))
         defaults = [row for row in result['checks'] if row['case'].startswith('mini_default_output')]
         self.assertEqual({row['protocol'] for row in defaults}, {'chat.completions', 'responses'})
         self.assertTrue(all(row['ledger']['output_bound'] <= 16384 and row['max_output_tokens_sent'] is None for row in defaults))
@@ -419,14 +579,13 @@ class ProbeTests(unittest.TestCase):
         def handler(request):
             payload = json.loads(request.content); calls.append(payload)
             if request.url.path.endswith('chat/completions') and payload['model'] == 'gpt-6-astra':
-                return httpx.Response(400, json={'error': {'code': 'chat_tools_require_responses',
-                    'message': 'Use /v1/responses preserving reasoning and tools.'}})
+                return httpx.Response(400, json=self.chat_rejection())
             data = native.tool_response(); data['model'] = payload['model']
             if payload.get('stream'):
                 return httpx.Response(200, content=fixture.sse_event({'type': 'response.completed', 'response': data}))
             return httpx.Response(200, json=data)
         real = httpx.Client
-        with patch('sys.argv', ['probe', '--base-url', 'http://127.0.0.1:8790', '--models', 'gpt-5.5']), \
+        with patch('sys.argv', ['probe', '--base-url', 'http://127.0.0.1:8790']), \
              patch.dict(os.environ, {'LUOMO_API_KEY': secret}), \
              patch('scripts.issue8_contract_probe.httpx.Client', side_effect=lambda **kw: real(transport=httpx.MockTransport(handler), **kw)):
             out = StringIO()
@@ -434,7 +593,7 @@ class ProbeTests(unittest.TestCase):
         result = json.loads(out.getvalue())
         self.assertNotIn(secret, out.getvalue())
         self.assertTrue(result['passed'])
-        self.assertEqual(len(result['checks']), 5)
+        self.assertEqual(len(result['checks']), 7)
         self.assertEqual(result['verified_tool_records']['gpt-5.5']['tool_protocols'], ['Responses', 'Responses SSE'])
         self.assertIn('max_output_tokens', calls[0]); self.assertNotIn('max_tokens', calls[0])
         self.assertNotIn('max_output_tokens', calls[-1]); self.assertNotIn('max_tokens', calls[-1])

@@ -72,6 +72,70 @@ def _identity_matches(requested: str, actual: object) -> bool:
         return False
 
 
+def _chat_tools_valid(payload: dict) -> bool:
+    """Require a completed Chat function call, never a Responses-shaped reply."""
+    choices = payload.get('choices')
+    if payload.get('object') != 'chat.completion' or not isinstance(choices, list) or not choices:
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict) or choice.get('finish_reason') != 'tool_calls':
+            return False
+        message = choice.get('message')
+        if not isinstance(message, dict) or message.get('role') != 'assistant':
+            return False
+        calls = message.get('tool_calls')
+        if not isinstance(calls, list) or not calls:
+            return False
+        for call in calls:
+            if not isinstance(call, dict) or call.get('type') != 'function':
+                return False
+            function = call.get('function')
+            if not isinstance(function, dict) or function.get('name') != 'report_ready':
+                return False
+            try:
+                arguments = json.loads(function.get('arguments'))
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(arguments, dict) or arguments.get('ready') is not True:
+                return False
+    return True
+
+
+def _guided_chat_rejection(payload: dict) -> bool:
+    error = payload.get('error')
+    if not isinstance(error, dict):
+        return False
+    message = error.get('message')
+    if (error.get('type') != 'invalid_request_error' or error.get('code') != 'chat_tools_require_responses'
+            or not isinstance(message, str) or '/v1/responses' not in message or 'none' in message.lower()
+            or (error.get('param') is not None and not isinstance(error['param'], str))):
+        return False
+    # Even null/empty receipts contradict a known pre-generation rejection.
+    evidence_fields = {'usage', 'choices', 'output', 'response', 'content', 'data', 'tool_calls', 'function_call'}
+
+    def has_evidence(value):
+        if isinstance(value, dict):
+            return bool(evidence_fields & value.keys()) or any(has_evidence(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_evidence(item) for item in value)
+        return False
+
+    return not has_evidence(payload)
+
+
+def _settled_audit(audit: dict) -> bool:
+    amounts = [audit.get(key) for key in ('expected_charge_units', 'credit_charged_units', 'actual_units')]
+    return (audit.get('credit_status') == 'settled' and audit.get('hold_status') == 'settled'
+            and all(type(amount) is int and amount >= 0 for amount in amounts)
+            and amounts[0] == amounts[1] == amounts[2])
+
+
+def _released_audit(audit: dict) -> bool:
+    return (audit.get('credit_status') == 'released' and audit.get('hold_status') == 'released'
+            and all(type(audit.get(key)) is int and audit[key] == 0
+                    for key in ('credit_charged_units', 'actual_units')))
+
+
 def _audit(path: Path | None, request_id: str, payload: dict, protocol: str) -> dict | None:
     if path is None:
         return None
@@ -149,22 +213,32 @@ def run_contract(client: httpx.Client, *, models: list[str], chat_model: str,
                         tool_ok |= json.loads(item.get('arguments', '{}')).get('ready') is True
                     except (ValueError, TypeError, AttributeError):
                         pass
+            if case == 'chat_tools_negative':
+                tool_ok = _chat_tools_valid(payload)
             row['tool_call_ok'] = tool_ok
             audit = _audit(ledger_db, row['request_id'], payload, protocol)
             row['ledger'] = audit
+            success = (row['status'] == 200 and details is not None and row['identity_verified']
+                       and not row['error_present'] and not row['environment_blocked'] and not stream_failed
+                       and row['output_shape_valid'])
             if case == 'chat_tools_negative':
-                passed = row['status'] == 400 and row['error_code'] == 'chat_tools_require_responses' and row['recommends_responses'] and not row['recommends_none']
+                # Keep the legacy case name for report consumers; this single
+                # non-streaming probe can demonstrate support or a guided rejection.
+                supported = success and tool_ok
+                rejected = (row['status'] == 400 and not row['environment_blocked']
+                            and _guided_chat_rejection(payload))
                 if audit is not None:
-                    passed &= audit.get('credit_status') == 'released' and audit.get('actual_units') == 0
+                    supported &= _settled_audit(audit)
+                    rejected &= _released_audit(audit)
+                passed = supported or rejected
+                row['chat_tools_outcome'] = ('supported_200' if supported else
+                                             'guided_rejection_400' if rejected else None)
             else:
-                passed = (row['status'] == 200 and details is not None and row['identity_verified']
-                          and not row['error_present'] and not row['environment_blocked'] and not stream_failed
-                          and row['output_shape_valid'])
+                passed = success
                 if case.startswith('responses_tools'):
                     passed &= tool_ok and payload.get('status') == 'completed'
                 if audit is not None:
-                    passed &= audit.get('credit_status') == 'settled' and audit.get('hold_status') == 'settled'
-                    passed &= audit.get('expected_charge_units') == audit.get('credit_charged_units')
+                    passed &= _settled_audit(audit)
                     if case.startswith('mini_default_output'):
                         passed &= 0 < (audit.get('output_bound') or 0) <= 16384
             row['passed'] = bool(passed)
