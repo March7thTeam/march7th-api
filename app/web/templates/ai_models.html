@@ -40,9 +40,12 @@
   {% set line = line_for(model.id) %}
   <article class="line-card {{ '' if (model.callable|default(model.text_candidate)) else 'muted-card' }}" data-line="{{ line.family }}" data-callable="{{ 1 if (model.callable|default(model.text_candidate)) else 0 }}" data-vision="{{ 1 if model.vision and model.text_candidate else 0 }}">
     <div class="top">{{ roundel(model.id, 'lg') }}<div><h3>{{ model.name }}</h3><div class="id">{{ model.id }}</div></div></div>
-    <div class="chips"><span class="chip">{{ model.category }}</span>{% if model.vision and model.text_candidate %}<span class="chip vision" title="{{ '网关已开放图像输入' if image_input_enabled() else '模型支持图像输入；本站网关尚未开放' }}">图像输入{{ '' if image_input_enabled() else '（未开放）' }}</span>{% endif %}<span class="badge {{ model.state.tone }}">{{ model.state.label }}</span></div>
+    <div class="chips"><span class="chip">{{ model.category }}</span>{% if model.native_responses %}<span class="chip">原生 Responses</span>{% endif %}{% if model.vision and model.text_candidate %}<span class="chip vision" title="{{ '网关已开放图像输入' if image_input_enabled() else '模型支持图像输入；本站网关尚未开放' }}">图像输入{{ '' if image_input_enabled() else '（未开放）' }}</span>{% endif %}<span class="badge {{ model.state.tone }}">{{ model.state.label }}</span></div>
     <p>{{ model.use }}</p>
-    <div class="verify">{% if model.verification %}<strong>已实测</strong> {{ model.verification.protocols|join(' · ') }}<br><span class="mono">{{ model.verification.checked_at[:10] }}</span>{% else %}{{ model.note }}{% endif %}</div>
+    <div class="verify">{% if model.verification.protocols %}<strong>文本已实测</strong> {{ model.verification.protocols|join(' · ') }}<br><span class="mono">{{ model.verification.checked_at[:10] }}</span>{% elif model.text_candidate %}文本请求尚未实测{% endif %}
+    {% if model.verification.tool_protocols %}<br><strong>工具已实测</strong> {{ model.verification.tool_protocols|join(' · ') }}<br><span class="mono">{{ model.verification.tools_checked_at[:10] }}</span>{% elif model.text_candidate %}<br>工具请求尚未实测{% endif %}
+    {% if not model.verification and not model.text_candidate %}{{ model.note }}{% endif %}</div>
+    {% if model.max_output_tokens %}<p class="muted small">输出上限 {{ '{:,}'.format(model.max_output_tokens) }} token</p>{% endif %}
     {% if model.image_generation %}<div class="foot"><a class="btn sm" href="/developer/images?model={{ model.id }}">试用图像生成 →</a></div>{% endif %}
     {% if model.text_candidate %}<div class="foot"><button class="btn sm" type="button" data-select-model="{{ model.id }}">用它生成配置 <span class="arrow" aria-hidden="true">↓</span></button></div>{% endif %}
   </article>

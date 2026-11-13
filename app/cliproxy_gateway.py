@@ -28,9 +28,10 @@ from starlette.concurrency import run_in_threadpool
 from app.auth import api_user_eligible, require_developer
 from app.credit_pricing import priced_models
 from app.admin_key_policy import AdminKeyPolicyError, admin_unmetered
-from app.credit_pricing import (AUTO_OUTPUT_TIERS, DEFAULT_OUTPUT_TOKENS, PricingError, billing_details, billing_receipt_present,
-                                output_limit_requested, prepare_billable_request)
+from app.credit_pricing import (DEFAULT_OUTPUT_TOKENS, PricingError, billing_details, billing_receipt_present,
+                                checked_output_limit, output_limit_requested, prepare_billable_request)
 from app.credit_ledger import recover_stale_usage, wallet_snapshot
+from app.text_capabilities import NATIVE_RESPONSES_MODELS, automatic_output_tiers, native_responses_enabled
 from app.image_generation import (IMAGE_ENDPOINT, IMAGE_UPSTREAM_URL, image_generation_enabled,
                                   image_generation_available, prepare_image_request, valid_image_response)
 
@@ -89,12 +90,6 @@ ALLOWED_GATEWAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPT
 STREAM_USAGE_GRACE_SECONDS = 5.0
 STREAM_USAGE_GRACE_BYTES = 1024 * 1024
 NATIVE_RESPONSES_URL = "https://api.openai.com/v1/responses"
-# Preserve older proxy aliases and exact billing-model matching. Native routing
-# is an explicit compatibility path, not a migration of every Responses model.
-NATIVE_RESPONSES_MODELS = frozenset({
-    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra",
-    "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
-})
 
 
 class MeteredStreamingResponse(StreamingResponse):
@@ -132,6 +127,16 @@ PREGENERATION_ERROR_CODES = {400: {"context_length_exceeded"}, 401: {"invalid_ap
 PROXY_AUTH_UNAVAILABLE_STATUSES = {401, 503}
 
 
+def _known_chat_tool_error(payload: Any, status_code: int, protocol: str, request_model: str | None) -> bool:
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return False
+    error = payload["error"]
+    return (status_code == 400 and protocol == "chat.completions" and error.get("type") == "invalid_request_error"
+            and isinstance(request_model, str) and bool(request_model) and error.get("message") == (
+                f"Function tools with reasoning_effort are not supported for {request_model} in /v1/chat/completions. "
+                "To use function tools, use /v1/responses or set reasoning_effort to 'none'."))
+
+
 def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str, *, request_model: str | None = None) -> bool:
     """Only specific, structured pre-generation errors can release a hold."""
     if not isinstance(payload, dict) or billing_receipt_present(payload, protocol=protocol):
@@ -142,11 +147,9 @@ def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str
     if not isinstance(error, dict):
         return False
     code, message = error.get("code"), error.get("message")
-    if (status_code == 400 and protocol == "chat.completions" and error.get("type") == "invalid_request_error"
-            and isinstance(request_model, str) and request_model and message == (
-                f"Function tools with reasoning_effort are not supported for {request_model} in /v1/chat/completions. "
-                "To use function tools, use /v1/responses or set reasoning_effort to 'none'.")):
-        # This exact compatibility error is raised before generation. Unlike
+    if (_known_chat_tool_error(payload, status_code, protocol, request_model)
+            or (status_code == 429 and code == "credit_balance_exhausted" and error.get("type") == "insufficient_quota")):
+        # These exact provider errors are raised before generation. Unlike
         # older provider codes, require generation fields to be entirely absent
         # (even null/empty/nested) before releasing a dispatched reservation.
         pending = [payload]
@@ -174,11 +177,12 @@ def _available_credit_units(user_id: int) -> int:
 
 def _auto_output_limit(payload: dict, protocol: str, available_units: int) -> int:
     """Largest automatic output tier whose worst-case reservation the caller can afford."""
-    for tier in AUTO_OUTPUT_TIERS:
+    tiers = automatic_output_tiers(payload["model"])
+    for tier in tiers:
         _, quote = prepare_billable_request(payload, protocol=protocol, default_output_tokens=tier)
         if quote.amount_units <= available_units:
             return tier
-    return DEFAULT_OUTPUT_TOKENS
+    return tiers[-1]
 
 
 def _request_id(request: Request) -> str:
@@ -700,15 +704,23 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
                         available = await run_in_threadpool(_available_credit_units, key_row["user_id"])
                         default_limit = _auto_output_limit(payload, billing_protocol, available)
                     payload, billing_quote = prepare_billable_request(payload, protocol=billing_protocol, default_output_tokens=default_limit)
-                elif endpoint == "/v1/chat/completions" and payload.get("stream") is True:
-                    options = payload.get("stream_options")
-                    if options is None or isinstance(options, dict):
-                        payload["stream_options"] = {**(options or {}), "include_usage": True}
+                else:
+                    # Exemption skips money, not known model output limits. Keep
+                    # all other administrator request parameters unchanged.
+                    protocol = ENDPOINT_PROTOCOLS[endpoint]
+                    limit = checked_output_limit(payload, protocol=protocol,
+                        default_output_tokens=automatic_output_tiers(payload["model"])[0])
+                    if not output_limit_requested(payload, protocol=protocol):
+                        payload["max_completion_tokens" if protocol == "chat.completions" else "max_output_tokens"] = limit
+                    if endpoint == "/v1/chat/completions" and payload.get("stream") is True:
+                        options = payload.get("stream_options")
+                        if options is None or isinstance(options, dict):
+                            payload["stream_options"] = {**(options or {}), "include_usage": True}
                 body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
             except PricingError as exc:
                 return json_error(400, "invalid_request_error", exc.message, request_id=request_id, code=exc.code)
         native_responses = (endpoint == "/v1/responses" and payload["model"] in NATIVE_RESPONSES_MODELS
-                            and os.getenv("GATEWAY_NATIVE_RESPONSES", "false").strip().lower() == "true")
+                            and native_responses_enabled())
         if endpoint == IMAGE_ENDPOINT:
             upstream_key = os.getenv("GATEWAY_IMAGE_API_KEY", "").strip()
         elif native_responses:
@@ -986,6 +998,8 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
                 headers = {"X-Request-ID": request_id, "Content-Type": "application/json", "Cache-Control": "no-store"}
                 if image_over_budget and not expected_admin_unmetered:
                     headers["X-Credit-Status"] = "reconciliation_required"
+        release = _explicit_generation_rejection(receipt_payload, upstream.status_code, protocol,
+                                                 request_model=payload.get("model") if payload else None)
         await _finish_async(
             reservation,
             key_row=key_row,
@@ -999,12 +1013,21 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
             usage=usage,
             billing_usage=None if image_receipt_invalid else details,
             billing_receipt_seen=billing_receipt_present(receipt_payload, protocol=protocol),
-            billing_release=_explicit_generation_rejection(receipt_payload, upstream.status_code, protocol,
-                                                            request_model=payload.get("model") if payload else None),
+            billing_release=release,
             response_preview="[response body not retained]",
         )
         if image_receipt_invalid:
             return json_error(502, "upstream_error", "The Image API returned an invalid image or usage receipt; this request requires reconciliation.", request_id=request_id, code="image_receipt_invalid")
+        # Settlement above must use the unmodified provider evidence. Only the
+        # caller-facing guidance changes; retain any usage/output/error fields.
+        if release and _known_chat_tool_error(receipt_payload, upstream.status_code, protocol, payload.get("model") if payload else None):
+            friendly = {**receipt_payload, "error": {**receipt_payload["error"],
+                "code": "chat_tools_require_responses",
+                "message": "This tools + reasoning combination is unsupported by the upstream Chat Completions API. "
+                           "Use this gateway's POST /v1/responses with the Responses tool format, preserving reasoning and tools."}}
+            response_body = json.dumps(friendly, ensure_ascii=False, separators=(",", ":")).encode()
+            headers.pop("content-length", None)
+            headers["content-type"] = "application/json"
         return Response(content=response_body, status_code=upstream.status_code, headers=headers)
     except asyncio.CancelledError:
         with anyio.CancelScope(shield=True):

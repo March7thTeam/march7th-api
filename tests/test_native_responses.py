@@ -162,19 +162,26 @@ class NativeResponsesTests(unittest.TestCase):
         self.assertEqual(self.calls[-1]['url'], 'https://upstream.example.test/v1/responses')
         self.assert_settled()
 
-    def test_older_alias_keeps_proxy_with_native_flag_on_and_key_missing(self):
+    def test_reviewed_alias_uses_native_and_requires_native_key(self):
         self.fund(FUND)
-        self.expected_native = False
         self.response_json = tool_response()
         self.response_json['model'] = 'gpt-4o-mini'
-        for native_key in ('fixture-native-response-provider-key', ''):
-            with patch.dict(os.environ, {'GATEWAY_NATIVE_RESPONSES_API_KEY': native_key}):
-                result = self.generate(self.payload(model='gpt-4o-mini'))
-            self.assertEqual(result.status_code, 200)
-            self.assertEqual(self.calls[-1]['url'], 'https://upstream.example.test/v1/responses')
-            self.assertEqual(self.accounting()[1]['status'], 'settled')
-        self.assertEqual(len(self.calls), 2)
+        result = self.generate(self.payload(model='gpt-4o-mini'))
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.calls[-1]['url'], 'https://api.openai.com/v1/responses')
+        with patch.dict(os.environ, {'GATEWAY_NATIVE_RESPONSES_API_KEY': ''}):
+            self.assertEqual(self.generate(self.payload(model='gpt-4o-mini')).status_code, 503)
+        self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.accounting()[2]['reserved_units'], 0)
+
+    def test_unreviewed_legacy_model_stays_proxy_even_without_native_key(self):
+        self.fund(FUND)
+        self.expected_native = False
+        self.response_json = tool_response(); self.response_json['model'] = 'gpt-3.5-turbo'
+        with patch.dict(os.environ, {'GATEWAY_NATIVE_RESPONSES_API_KEY': ''}):
+            result = self.generate(self.payload(model='gpt-3.5-turbo'))
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.calls[-1]['url'], 'https://upstream.example.test/v1/responses')
 
     def test_enabled_missing_key_does_not_reserve_dispatch_or_fallback(self):
         self.fund(FUND)

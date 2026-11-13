@@ -38,8 +38,14 @@ def board_state(model_id: str, text_candidate: bool) -> dict:
 
 
 def verification_note(verification: dict | None, text_candidate: bool) -> str:
-    """Short test-coverage note shared by the departure board and the model cards."""
-    protocols = (verification or {}).get("protocols") or []
-    if protocols:
-        return f"已实测 {len(protocols)} 种协议"
-    return "待本站实测" if text_candidate else "—"
+    """Report independent text and tool coverage without inventing checks."""
+    text = (verification or {}).get("protocols") or []
+    tools = (verification or {}).get("tool_protocols") or []
+    notes = []
+    if text:
+        notes.append(f"文本已实测 {len(text)} 种协议")
+    if tools:
+        notes.append(f"工具已实测 {len(tools)} 种协议")
+    elif text_candidate:
+        notes.append("工具待实测")
+    return " · ".join(notes) if notes else "待本站实测" if text_candidate else "—"

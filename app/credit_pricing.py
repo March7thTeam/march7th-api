@@ -10,16 +10,13 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 import posixpath
 from app.image_input import IMAGE_INPUT_TOKEN_CEILING, image_safe_bytes, validate_image_inputs
+from app.text_capabilities import (MAX_OUTPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AUTO_OUTPUT_TIERS,
+                                   automatic_output_tiers, output_token_ceiling)
 
 PRICE_DATA = json.loads(Path(__file__).with_name("credit_prices.json").read_text(encoding="utf-8"))
 MODEL_ALIAS_DATA = json.loads(Path(__file__).with_name("credit_model_aliases.json").read_text(encoding="utf-8"))
 UNITS_PER_CREDIT = 1_000_000
 CREDITS_PER_USD = 720
-MAX_OUTPUT_TOKENS = 128_000
-DEFAULT_OUTPUT_TOKENS = 2048
-# When the caller sets no output limit, the gateway picks the largest of these the
-# caller's available credits can reserve (falling back to DEFAULT_OUTPUT_TOKENS).
-AUTO_OUTPUT_TIERS = (32768, 16384, 8192, 4096, DEFAULT_OUTPUT_TOKENS)
 MAX_TOKEN_COUNT = 10_000_000
 
 
@@ -97,6 +94,19 @@ def output_limit_requested(payload: Any, *, protocol: str) -> bool:
     return any(key in payload for key in keys)
 
 
+def checked_output_limit(payload: dict, *, protocol: str, default_output_tokens: int = DEFAULT_OUTPUT_TOKENS) -> int:
+    """Validate explicit limits unchanged; constrain only an absent limit."""
+    keys = ("max_tokens", "max_completion_tokens") if protocol == "chat.completions" else ("max_output_tokens",)
+    limits = [payload[key] for key in keys if key in payload]
+    if len(limits) == 2 and (type(limits[0]) is not type(limits[1]) or limits[0] != limits[1]):
+        raise PricingError("billing_limit_invalid", "Use only one output token limit.")
+    limit = limits[0] if limits else min(default_output_tokens, automatic_output_tiers(payload["model"])[0])
+    ceiling = output_token_ceiling(payload["model"])
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= ceiling:
+        raise PricingError("billing_limit_invalid", f"The output token limit for {payload['model']} must be between 1 and {ceiling}.")
+    return limit
+
+
 def prepare_billable_request(payload: dict, *, protocol: str, default_output_tokens: int = DEFAULT_OUTPUT_TOKENS) -> tuple[dict, BillingQuote]:
     card = model_price(payload["model"])
     # Copy through JSON: neither the caller nor the quote may mutate after admission.
@@ -117,11 +127,8 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
     tools = outgoing.get("tools", [])
     if not isinstance(tools, list) or any(not isinstance(t, dict) or t.get("type") not in {"function", "custom"} for t in tools):
         raise PricingError("billing_shape_unsupported", "Only caller-run function tools are supported.")
+    limit = checked_output_limit(outgoing, protocol=protocol, default_output_tokens=default_output_tokens)
     if protocol == "chat.completions":
-        limits = [outgoing[k] for k in ("max_tokens", "max_completion_tokens") if k in outgoing]
-        if len(limits) == 2 and limits[0] != limits[1]:
-            raise PricingError("billing_limit_invalid", "Use only one output token limit.")
-        limit = limits[0] if limits else default_output_tokens
         outgoing.pop("max_tokens", None)
         outgoing["max_completion_tokens"] = limit
         if outgoing.get("stream") is True:
@@ -130,11 +137,8 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
                 raise PricingError("billing_shape_unsupported", "stream_options must be an object.")
             outgoing["stream_options"] = {**options, "include_usage": True}
     else:
-        limit = outgoing.get("max_output_tokens", default_output_tokens)
         outgoing["max_output_tokens"] = limit
         outgoing["store"] = False
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_OUTPUT_TOKENS:
-        raise PricingError("billing_limit_invalid", f"The output token limit must be between 1 and {MAX_OUTPUT_TOKENS}.")
     encoded = image_safe_bytes(outgoing) if images else json.dumps(outgoing, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
     # Every text token contains at least one UTF-8 byte. Reserve additional framing
     # headroom. An unexpected upstream expansion is held for review, never capped
