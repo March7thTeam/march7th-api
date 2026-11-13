@@ -117,3 +117,46 @@ POST     /apis/{id}/endpoints/{endpoint_id}/delete
 Responses 使用 `input[].content[]` 中的 `{"type":"input_image","image_url":"https://example.com/image.png","detail":"auto"}`。`detail` 可省略，允许 `auto` / `low` / `high`。URL 仅 HTTPS 或 PNG/JPEG/WebP/GIF base64 data URL；最多 16 张，单张 data 解码后最多 8 MiB，总请求体仍为 20 MiB。网关不下载 URL；文件、音频、内置工具和其他非文本形状仍拒绝。
 
 预留输入上界 = 仅替换图像 data URL 后的请求字节数 + 4096 + `images * IMAGE_INPUT_TOKEN_CEILING`（8000）。正文内的 data URL 文本不会被替换。该上界参与长上下文判断，按输入价（含既有 cache-write 保守上界）预留，快照保存 `images` / `image_token_ceiling`。结算仍依赖上游真实 token 和缓存拆分，图像实际费用超出预留时转人工待核（即使尚有可用余额），异常/余额不足也沿用既有待核；既有纯文本超额结算策略保持不变，禁止静默少扣和透支。
+
+
+## Optional native Responses transport
+
+`GATEWAY_NATIVE_RESPONSES=true` with the server-only `GATEWAY_NATIVE_RESPONSES_API_KEY`
+sends `POST /v1/responses` to the fixed `https://api.openai.com/v1/responses` only for
+these exact model IDs: `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
+`gpt-6.1-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`. This applies with or
+without tools. Other models, including `gpt-4o-mini`, keep their existing CodexProxy
+route so dated upstream snapshots do not introduce new exact-model billing failures.
+No model-prefix normalization or receipt-model rewriting occurs.
+With the flag off, all Responses models use the existing CodexProxy path. Enabling
+native routing without its key returns503 only for the eight selected models,
+before any usage/credit reservation or dispatch. It never silently falls back for
+a selected native model. Chat Completions stays on CodexProxy, and image
+flags/credentials remain independent. Fresh authorization/content-type/accept
+headers prevent caller provider headers from affecting the official request.
+
+The existing scope/model/user checks, rate/quota enforcement, pricing snapshots,
+reservation/send boundary, JSON/SSE relay, usage parsing and reconciliation remain
+shared. `max_output_tokens`, `reasoning`, function schemas and tool choices are
+preserved. No Chat-to-Responses translation or automatic reasoning downgrade occurs.
+GPT-6 Astra, GPT-6.1 Sol and GPT-6.1 Terra function-tool callers should choose
+Responses in their client; Astra does not support reasoning `none`. Existing model
+availability, whitelist and official-price requirements still apply.
+
+Only the verified Chat pre-generation compatibility error (HTTP400,
+`invalid_request_error`, exact message matching the requested model and no
+usage/output evidence) releases its hold. Unknown400 responses or any receipt/output
+evidence remain under the existing conservative reconciliation rules. This does not
+retroactively modify historical holds; those require an audited administrative action.
+
+
+## Price-equivalent current snapshots
+
+Text receipts retain their actual upstream model. `credit_model_aliases.json`
+allows only14 reviewed canonical alias→one exact official current snapshot pairs
+for billing-model verification. Each pair requires the quoted text price version
+and SHA256 of its full canonical JSON price card to match the reviewed metadata;
+unknown dates, cross-model snapshots, reverse mappings and changed prices still
+require reconciliation. The metadata records official model/pricing sources and
+retrieval dates. This does not add model grants or priced SKUs, rewrite responses,
+alter image billing, or automatically settle historical holds.

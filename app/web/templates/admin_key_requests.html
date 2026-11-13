@@ -3,7 +3,7 @@
 {% block content %}
 {% set states = {'approved':('ok','已签发'),'pending':('warn','待审核'),'rejected':('off','已拒绝')} %}
 <div class="page-head"><div><p class="eyebrow">Requests · 密钥申请</p><h1>密钥申请</h1><p class="lead">自助签发的 AI 密钥会自动记为“已签发”。需要业务权限的申请在这里设置协议、模型、配额与有效期；完整密钥只显示一次。</p></div></div>
-<div class="notice"><strong>按权限范围签发</strong><p>AI 权限可选 <code>models:read</code>、<code>chat:completions</code>、<code>responses:create</code>，并填写允许的模型 ID；业务权限按路由 scope 填写。</p></div>
+<div class="notice"><strong>按权限范围签发</strong><p>AI 权限可选 <code>models:read</code>、<code>chat:completions</code>、<code>responses:create</code>、<code>images:generate</code>，并填写允许的模型 ID；业务权限按路由 scope 填写。</p></div>
 {% if new_key %}
 <div class="notice success"><strong>新密钥已生成</strong><p>只显示这一次，请通过安全渠道交给申请人。</p>
   <div class="key-output section-note"><code id="pending-issued-key">{{ new_key }}</code><button type="button" class="btn primary" data-copy-target="pending-issued-key">复制完整密钥</button></div>

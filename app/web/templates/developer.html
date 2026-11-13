@@ -9,7 +9,7 @@
 {% set first_call = t.requests > 0 or recent|length > 0 %}
 <div class="page-head">
   <div><p class="eyebrow">Console · 控制台</p><h1>你好，{{ user.username }}</h1><p class="lead">一个地址接入全部模型线路。这里能看到余额、密钥和最近两周的调用情况。</p></div>
-  <div class="actions"><a class="btn primary" href="/developer/playground">在线试用 <span class="arrow" aria-hidden="true">→</span></a><a class="btn" href="/developer/keys">新建密钥</a></div>
+  <div class="actions"><a class="btn ghost" href="/developer/images">图像生成</a><a class="btn primary" href="/developer/playground">在线试用 <span class="arrow" aria-hidden="true">→</span></a><a class="btn" href="/developer/keys">新建密钥</a></div>
 </div>
 
 {% if not user.email_verified %}

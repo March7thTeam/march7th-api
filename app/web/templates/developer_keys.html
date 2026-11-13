@@ -24,10 +24,10 @@
 </div>
 
 <section class="card strong">
-  <div class="split"><div><h2>签发新密钥</h2><p class="muted small">包含模型目录、Chat Completions 与 Responses 权限，每分钟 60 次，可调用全部已计价模型。</p></div></div>
+  <div class="split"><div><h2>签发新密钥</h2><p class="muted small">包含模型目录、Chat Completions、Responses 与图像生成权限，每分钟 60 次，可调用全部已计价模型。</p></div></div>
   <form method="post" action="/developer/keys/request" class="inline-row section-gap">
     <input type="hidden" name="key_nonce" value="{{ key_nonce }}">
-    <input type="hidden" name="requested_scopes" value="models:read,chat:completions,responses:create">
+    <input type="hidden" name="requested_scopes" value="models:read,chat:completions,responses:create,images:generate">
     <label class="field grow">名称<input name="name" type="text" placeholder="例如：AIRI 桌面伴侣、博客摘要脚本" maxlength="100" required autocomplete="off"></label>
     <label class="field grow">用途（可选）<input name="requested_reason" type="text" placeholder="例如：日常聊天" maxlength="2000" autocomplete="off"></label>
     <button class="btn primary" type="submit" data-busy="签发中…">签发 <span class="arrow" aria-hidden="true">→</span></button>

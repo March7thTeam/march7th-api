@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
@@ -11,6 +12,7 @@ import posixpath
 from app.image_input import IMAGE_INPUT_TOKEN_CEILING, image_safe_bytes, validate_image_inputs
 
 PRICE_DATA = json.loads(Path(__file__).with_name("credit_prices.json").read_text(encoding="utf-8"))
+MODEL_ALIAS_DATA = json.loads(Path(__file__).with_name("credit_model_aliases.json").read_text(encoding="utf-8"))
 UNITS_PER_CREDIT = 1_000_000
 CREDITS_PER_USD = 720
 MAX_OUTPUT_TOKENS = 128_000
@@ -153,6 +155,9 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
 
 
 def billing_details(payload: Any, *, protocol: str) -> dict | None:
+    if protocol == "images.generations":
+        from app.image_generation import image_billing_details
+        return image_billing_details(payload)
     if not isinstance(payload, dict):
         return None
     response = payload.get("response") if protocol.startswith("response") and isinstance(payload.get("response"), dict) else payload
@@ -200,14 +205,37 @@ def billing_receipt_present(payload: Any, *, protocol: str) -> bool:
     return isinstance(response, dict) and "usage" in response and response["usage"] is not None
 
 
+def _price_equivalent_snapshot(snap: dict, actual_model: Any) -> bool:
+    """Accept only a reviewed current snapshot under its exact pinned price card.
+
+    This affects receipt verification only: request grants, response model names,
+    price SKUs and historical holds remain unchanged. No prefix/date inference.
+    """
+    if not isinstance(actual_model, str) or snap.get("version") != MODEL_ALIAS_DATA["price_version"]:
+        return False
+    entry = MODEL_ALIAS_DATA["models"].get(snap["model"])
+    if not entry or actual_model != entry["snapshot"]:
+        return False
+    try:
+        canonical_card = json.dumps(snap["card"], sort_keys=True, separators=(",", ":"),
+                                    ensure_ascii=True, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError):
+        return False
+    return hashlib.sha256(canonical_card).hexdigest() == entry["price_card_sha256"]
+
+
 def calculate_charge(snapshot: str, details: dict) -> int:
     snap = json.loads(snapshot)
+    if snap.get("kind") == "image_generation":
+        from app.image_generation import image_charge
+        return image_charge(snap, details)
     card = snap["card"]
     inputs, outputs = _count(details["input_tokens"]), _count(details["output_tokens"])
     cached, writes = _count(details["cached_tokens"]), _count(details["cache_write_tokens"])
     if cached + writes > inputs:
         raise PricingError("usage_invalid", "Cache counts exceed input tokens.")
-    if details.get("model") not in {None, snap["model"]}:
+    actual_model = details.get("model")
+    if actual_model is not None and actual_model != snap["model"] and not _price_equivalent_snapshot(snap, actual_model):
         raise PricingError("usage_model_mismatch", "The upstream model differs from the priced request model.")
     if details.get("service_tier") not in {None, "default", "standard", "auto"}:
         raise PricingError("usage_tier_mismatch", "The upstream did not report Standard processing.")

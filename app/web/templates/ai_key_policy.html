@@ -5,7 +5,7 @@
 {% if saved %}<div class="notice success" role="status">策略已保存。</div>{% endif %}
 <section class="card narrow-card">
   <form class="form" method="post">
-    <label class="field">协议与业务权限<input name="scopes" class="mono" value="{{ key.scopes or '' }}"><small>AI：models:read, chat:completions, responses:create。撤去对应权限即可禁止该协议；已有 codexproxy:use 加 codexproxy/* 的旧授权仍覆盖三项协议。</small></label>
+    <label class="field">协议与业务权限<input name="scopes" class="mono" value="{{ key.scopes or '' }}"><small>AI：models:read, chat:completions, responses:create, images:generate。撤去对应权限即可禁止该协议；已有 codexproxy:use 加 codexproxy/* 的旧授权仍覆盖三项协议。</small></label>
     <fieldset><legend>模型策略</legend>
       <label class="check"><input type="radio" name="model_policy" value="allowlist" {{ 'checked' if key.model_policy == 'allowlist' }}> 仅允许下方模型</label>
       <label class="check"><input type="radio" name="model_policy" value="all" {{ 'checked' if key.model_policy == 'all' }}> 允许所有模型（包括未来新增）</label>

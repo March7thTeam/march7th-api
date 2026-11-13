@@ -478,11 +478,18 @@ def settle_credit(conn: sqlite3.Connection, usage_id: int, actual_units: int | N
     # The new image ceiling is an explicit admission budget: a higher image
     # bill needs an audited decision even when spare funds exist. Keep legacy
     # text-overrun settlement unchanged.
+    snapshot = json.loads(hold["pricing_snapshot"]) if actual_units is not None else {}
     image_overrun = (actual_units is not None and actual_units > hold["amount_units"]
-                     and bool(json.loads(hold["pricing_snapshot"]).get("images")))
-    if image_overrun:
+                     and bool(snapshot.get("images")))
+    image_modality_overrun = False
+    if actual_units is not None and usage_json is not None and snapshot.get("kind") == "image_generation":
+        from app.image_generation import image_budget_exceeded
+        image_modality_overrun = image_budget_exceeded(snapshot, json.loads(usage_json))
+    if image_modality_overrun:
+        reason = "Image usage exceeded the reserved token ceiling; authoritative cost retained for manual reconciliation."
+    elif image_overrun:
         reason = "Image charge exceeded the reserved ceiling; manual reconciliation required."
-    if actual_units is None or image_overrun or not _can_cover_charge(conn,hold,actual_units,_wallet(conn,hold["user_id"])):
+    if actual_units is None or image_overrun or image_modality_overrun or not _can_cover_charge(conn,hold,actual_units,_wallet(conn,hold["user_id"])):
         conn.execute("UPDATE credit_holds SET status='reconciliation_required',actual_units=?,usage_json=?,reason=?,updated_at=? WHERE usage_id=? AND status=?",
                      (actual_units,usage_json,reason,now_iso(),usage_id,hold["status"]))
         conn.execute("DELETE FROM credit_hold_watch WHERE usage_id=?", (usage_id,))

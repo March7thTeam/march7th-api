@@ -58,6 +58,16 @@
   {% endif %}
 </section>
 
+<section id="image-pricing" class="section-gap">
+  <div class="block-title"><h2>图像生成</h2><a href="/developer/images">生成并下载 PNG →</a></div>
+  <p>每 100 万 token 的官方美元价；积分 = 美元 × 720。文生图的图片输入为 0，图片输出与文本输出分别计价，不使用缓存折扣。</p>
+  <div class="card flush"><div class="table-wrap"><table>
+    <thead><tr><th>模型</th><th>文本输入</th><th>图片输入</th><th>图片输出</th><th>文本输出</th></tr></thead>
+    <tbody>{% for model, card in image_prices.models.items() %}<tr><td><code>{{ model }}</code></td><td>${{ card.text_input }}</td><td>${{ card.image_input }}</td><td>${{ card.image_output }}</td><td>{{ ('$' ~ card.text_output) if card.text_output is not none else '不支持' }}</td></tr>{% endfor %}</tbody>
+  </table></div></div>
+  <p class="muted small section-note">冻结预算：文本输入按 prompt 的 UTF-8 字节数 + 4,096 token；方形图片输出 low / medium / high 分别按 512 / 2,048 / 8,192 token；两个矩形尺寸按 768 / 3,072 / 12,288 token，gpt-image-1.5 额外预留最多 4,096 文本输出 token。它们仅为预算上限，实际结算按回报用量精确向上取整到 0.000001 积分，多余冻结立即释放。超限或回报缺失/矛盾进入待核。省略 quality 或 auto = medium，size 省略或 auto = 1024x1024。<a href="{{ image_prices.source }}" rel="noopener noreferrer" target="_blank">官方价格 ↗</a> · 版本 <code>{{ image_prices.version }}</code></p>
+</section>
+
 <details class="more" {% if not lines %}open{% endif %}>
   <summary>其他官方已定价型号（{{ others|length }}）</summary>
   <div class="table-wrap"><table class="price-table">
@@ -66,5 +76,5 @@
   </table></div>
 </details>
 
-<p class="muted small section-note">价格来源：<a href="{{ prices.source }}" rel="noopener noreferrer" target="_blank">OpenAI 官方价格表 ↗</a> · 版本 <code>{{ prices.version }}</code> · 采集于 {{ prices.retrieved_at }}。上游目录中列出但没有官方文本价格的模型，个人密钥暂不能调用。</p>
+<p class="muted small section-note">价格来源：<a href="{{ prices.source }}" rel="noopener noreferrer" target="_blank">OpenAI 官方价格表 ↗</a> · 版本 <code>{{ prices.version }}</code> · 采集于 {{ prices.retrieved_at }}。文本表中的型号使用文本费率；图像生成单独使用上方分模态费率。目录可见不代表密钥已获授权。</p>
 {% endblock %}

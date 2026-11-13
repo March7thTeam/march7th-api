@@ -40,15 +40,19 @@ class ProxyEdgeTests(unittest.TestCase):
         response = client_from(STRANGER).get("/v1", headers=EDGE, follow_redirects=False)
         self.assertTrue(response.headers["location"].startswith("http://"))
 
-    def test_error_redirect_reports_visitor_not_bridge(self):
-        response = client_from(BRIDGE).get("/no-such-page", headers=EDGE, follow_redirects=False)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("ip=203.0.113.9", response.headers["location"])
-        self.assertNotIn(BRIDGE, response.headers["location"])
+    def test_browser_error_stays_same_origin_without_reporting_visitor_ip(self):
+        response = client_from(BRIDGE).get("/no-such-page", headers={**EDGE, "Accept": "text/html"}, follow_redirects=False)
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(response.headers['content-type'].startswith('text/html'))
+        self.assertNotIn('location', response.headers)
+        self.assertNotIn('203.0.113.9', response.text)
+        self.assertNotIn(BRIDGE, response.text)
 
     def test_untrusted_peer_cannot_choose_reported_address(self):
         response = client_from(STRANGER).get("/no-such-page", headers=EDGE, follow_redirects=False)
-        self.assertNotIn("203.0.113.9", response.headers["location"])
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("location", response.headers)
+        self.assertNotIn("203.0.113.9", response.text)
 
     def test_font_is_served_as_woff2(self):
         response = client_from(BRIDGE).get("/static/fonts/interchange-mono.woff2")

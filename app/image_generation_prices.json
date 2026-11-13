@@ -1,0 +1,9 @@
+{
+  "version": "openai-images-standard-2026-11-13-v1",
+  "source": "https://developers.openai.com/api/docs/pricing#image-generation",
+  "retrieved_at": "2026-11-13",
+  "models": {
+    "gpt-image-2": {"text_input": "5", "image_input": "8", "image_output": "30", "text_output": null},
+    "gpt-image-1.5": {"text_input": "5", "image_input": "8", "image_output": "32", "text_output": "10"}
+  }
+}

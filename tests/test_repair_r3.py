@@ -673,7 +673,7 @@ class DatabaseRecoveryRepairTests(fixture.BackendCase):
 
 class ProtocolScopeRepairTests(fixture.BackendCase):
     def seed_protocols(self):
-        for protocol in ('models', 'public', 'chat.completions', 'responses'):
+        for protocol in ('models', 'public', 'chat.completions', 'responses', 'images.generations'):
             usage_id = fixture.AnalyticsTests.log(self)
             self.execute("UPDATE api_usage_logs SET protocol=?,outcome='succeeded' WHERE id=?", (protocol, usage_id))
 
@@ -686,15 +686,15 @@ class ProtocolScopeRepairTests(fixture.BackendCase):
                     response = self.client.get(path, params={'days': days})
                     self.assertEqual(response.status_code, 200)
                     chart, detail = response.context['analytics'], response.context['usage']
-                    self.assertEqual(chart['totals']['requests'], 2)
-                    self.assertEqual(detail['summary']['requests'], 2)
-                    self.assertEqual(detail['summary']['succeeded'], 2)
-                    self.assertEqual(len(detail['recent']), 2)
+                    self.assertEqual(chart['totals']['requests'], 3)
+                    self.assertEqual(detail['summary']['requests'], 3)
+                    self.assertEqual(detail['summary']['succeeded'], 3)
+                    self.assertEqual(len(detail['recent']), 3)
                     self.assertEqual({row['protocol'] for row in detail['recent']}, set(usage.GENERATION_PROTOCOLS))
-                    self.assertEqual(sum(row['requests'] for row in chart['daily']), 2)
-                    self.assertEqual(sum(row['requests'] for row in detail['daily']), 2)
-                    self.assertEqual(sum(row['requests'] for row in chart['by_model']), 2)
-                    self.assertEqual(sum(row['requests'] for row in chart['by_key']), 2)
+                    self.assertEqual(sum(row['requests'] for row in chart['daily']), 3)
+                    self.assertEqual(sum(row['requests'] for row in detail['daily']), 3)
+                    self.assertEqual(sum(row['requests'] for row in chart['by_model']), 3)
+                    self.assertEqual(sum(row['requests'] for row in chart['by_key']), 3)
 
     def test_models_only_page_has_matching_empty_chart_and_details(self):
         usage_id = fixture.AnalyticsTests.log(self)
@@ -711,11 +711,11 @@ class ProtocolScopeRepairTests(fixture.BackendCase):
         for path in ('/api/developer/usage/analytics', '/api/admin/usage/analytics'):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json()['totals']['requests'], 4)
+            self.assertEqual(response.json()['totals']['requests'], 5)
         response = self.client.get('/api/developer/usage')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['summary']['requests'], 2)
-        self.assertEqual(usage.usage_analytics(self.user_id)['totals']['requests'], 4)
+        self.assertEqual(response.json()['summary']['requests'], 3)
+        self.assertEqual(usage.usage_analytics(self.user_id)['totals']['requests'], 5)
         self.assertEqual(usage.usage_analytics(self.user_id, protocols=[])['totals']['requests'], 0)
         self.assertEqual(usage.usage_analytics(self.user_id, protocols=['models'])['totals']['requests'], 1)
 
@@ -731,7 +731,7 @@ class ProtocolScopeRepairTests(fixture.BackendCase):
 
             with patch.object(db, 'connect', traced_connect):
                 chart = usage.usage_analytics(user_id, protocols=usage.GENERATION_PROTOCOLS)
-            self.assertEqual(chart['totals']['requests'], 2)
+            self.assertEqual(chart['totals']['requests'], 3)
             queries = [sql for sql in statements if 'FROM api_usage_logs' in sql]
             self.assertEqual(len(queries), 1)
             with closing(self.open_database()) as conn:

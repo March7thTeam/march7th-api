@@ -30,7 +30,7 @@ from app.credit_pricing import BillingQuote, PricingError, billing_details, bill
 
 UTC = timezone.utc
 MAX_SUMMARY_DAYS = 366
-GENERATION_PROTOCOLS = ("chat.completions", "responses")
+GENERATION_PROTOCOLS = ("chat.completions", "responses", "images.generations")
 
 
 @dataclass(frozen=True)
@@ -332,7 +332,7 @@ def reserve_usage(
         if require_private_grant:
             scopes = {part.strip() for part in str(current["scopes"] or "").replace(",", " ").split() if part.strip()}
             routes = {part.strip() for part in str(current["allowed_routes"] or "").replace(",", " ").split() if part.strip()}
-            legacy_ok = "codexproxy:use" in scopes and "codexproxy/*" in routes
+            legacy_ok = private_scope != "images:generate" and "codexproxy:use" in scopes and "codexproxy/*" in routes
             new_ok = private_scope is not None and private_scope in scopes
             if not (legacy_ok or new_ok):
                 conn.rollback()
@@ -344,7 +344,7 @@ def reserve_usage(
         if rejection:
             conn.rollback()
             return None, rejection
-        if protocol in {"chat.completions", "responses"} and billing_quote is None and not exempt:
+        if protocol in GENERATION_PROTOCOLS and billing_quote is None and not exempt:
             conn.rollback()
             return None, QuotaRejection("billing_quote_missing", "A credit reservation is required for generation.", 503)
         current_model_ids: tuple[str, ...] | None = None
@@ -907,7 +907,7 @@ def read_usage_summary(user_id: int | None, days: int = 7, *, window: UsageWindo
     from app.db import connect  # local import avoids importing app config here
 
     # Models/list and the older public gateway have separate accounting; this
-    # dashboard is specifically for the two text generation protocols.
+    # dashboard includes text and image generation while keeping the same summary keys.
     timestamp = "COALESCE(started_at, created_at)"
     if window is None:
         time_filter, args = f"{timestamp}>=?", [_summary_cutoff(days).isoformat()]
@@ -917,7 +917,7 @@ def read_usage_summary(user_id: int | None, days: int = 7, *, window: UsageWindo
         time_filter, args = _usage_window_filter(window, timestamp)
         day_sql = f"date(datetime({timestamp}))"
         order_sql = f"datetime({timestamp})"
-    where = "protocol IN (?, ?) AND " + time_filter
+    where = "protocol IN (" + ",".join("?" for _ in GENERATION_PROTOCOLS) + ") AND " + time_filter
     args = [*GENERATION_PROTOCOLS, *args]
     if user_id is not None:
         where += " AND user_id=?"
