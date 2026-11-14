@@ -177,7 +177,7 @@
       const cachedRate = option.dataset[key('cached')] ? rate('cached') : rate('input');
       const credits = ((inTokens - cachedTokens) * rate('input') + cachedTokens * cachedRate + outTokens * rate('output')) / 1e6;
       $('#est-credits').textContent = format(credits);
-      $('#est-usd').textContent = format(credits / 720, '$');
+      $('#est-usd').textContent = format(credits / Number(estimator.dataset.creditsPerUsd), '$');
       $('#est-cny').textContent = format(credits / 100, '¥');
     };
     estimator.addEventListener('input', update);
@@ -185,9 +185,17 @@
     update();
   }
 
-  // Show UTC timestamps in the visitor's local time where marked.
-  $$('time[data-local]').forEach(node => {
-    const date = new Date(node.getAttribute('datetime'));
-    if (!Number.isNaN(date.getTime())) node.textContent = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  // Preserve original UTC in title; render table timestamps in the visitor timezone.
+  document.querySelectorAll('time[data-local-time]').forEach(node => {
+    let raw = node.getAttribute('datetime');
+    if (!/(Z|[+-]\d\d:\d\d)$/.test(raw)) raw += 'Z';
+    const date = new Date(raw);
+    if (!Number.isNaN(date.getTime())) {
+      node.title = date.toISOString() + ' UTC';
+      node.textContent = date.toLocaleString(undefined, {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+    }
   });
+  document.querySelectorAll('[data-wallet-amount]').forEach(button => button.addEventListener('click', () => {
+    const input = document.getElementById('amount-cny'); if (input) input.value = button.dataset.walletAmount;
+  }));
 })();

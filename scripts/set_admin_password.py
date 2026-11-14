@@ -29,7 +29,7 @@ def update_env(updates: dict[str, str]) -> None:
 
 
 def main() -> None:
-    username = input("Admin username: ").strip() or "luomo"
+    username = input("Admin username: ").strip() or "admin"
     password = getpass.getpass("Admin password: ")
     confirm = getpass.getpass("Confirm password: ")
     if password != confirm:

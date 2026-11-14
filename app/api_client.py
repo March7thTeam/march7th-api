@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+from app.config import integration_secret
 
 from app.models import ALLOWED_METHODS
 from app.utils.redact import preview, redact_obj, redact_url
@@ -86,7 +87,7 @@ def validate_ip(ip: ipaddress._BaseAddress) -> None:
 def apply_saved_auth(headers: dict, api_row) -> None:
     if api_row["auth_type"] == "bearer":
         secret_ref = api_row["secret_ref"] or ""
-        secret = os.getenv(secret_ref) if secret_ref else ""
+        secret = integration_secret(secret_ref) if secret_ref else ""
         if not secret:
             raise TesterError(f"Saved auth is configured as bearer, but {secret_ref or 'secret'} is missing.")
         headers["Authorization"] = f"Bearer {secret}"

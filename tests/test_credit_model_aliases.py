@@ -114,7 +114,10 @@ class SnapshotAliasPricingTests(unittest.TestCase):
 
     def test_quoted_card_is_immutable_but_new_unreviewed_live_card_fails(self):
         old_quote = quote()
-        with patch.dict(PRICE_DATA['models']['gpt-4o-mini'], {'input': '999'}):
+        from app.price_store import current_release
+        release = copy.deepcopy(current_release())
+        release['text']['models']['gpt-4o-mini']['input'] = '999'
+        with patch('app.price_store.current_release', return_value=release):
             self.assertEqual(calculate_charge(old_quote.snapshot, self.details(EXPECTED_PAIRS['gpt-4o-mini'])), 2052)
             with self.assertRaises(PricingError):
                 calculate_charge(quote().snapshot, self.details(EXPECTED_PAIRS['gpt-4o-mini']))

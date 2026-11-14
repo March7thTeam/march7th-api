@@ -52,8 +52,11 @@ def amount_to_units(value: str | Decimal | int, currency: str = "credits") -> in
         value = value.strip()
         if len(value) > 40 or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
             raise CreditError("invalid_amount", "请输入非负十进制金额，不支持科学计数法。")
-    multiplier = {"credits": UNITS_PER_CREDIT, "cny": CREDITS_PER_CNY * UNITS_PER_CREDIT,
-                  "usd": CREDITS_PER_USD * UNITS_PER_CREDIT}.get(currency.lower())
+    if currency.lower() == 'usd':
+        from app.price_store import conversion
+        multiplier = Decimal(conversion()['base_credits_per_usd']) * UNITS_PER_CREDIT
+    else:
+        multiplier = {"credits": UNITS_PER_CREDIT, "cny": CREDITS_PER_CNY * UNITS_PER_CREDIT}.get(currency.lower())
     if multiplier is None:
         raise CreditError("invalid_currency", "不支持的金额单位。")
     try:
@@ -415,6 +418,9 @@ def release_reserved_credit(conn: sqlite3.Connection, usage_id: int, *, reason: 
 
 
 def _finalize(conn,hold,actual_units,reason,usage_json,actor_id=None,*,reserved_only=False):
+    from app.key_budget import key_charge_allowed
+    if not key_charge_allowed(conn,hold,actual_units):
+        raise CreditError('key_credit_limit_exceeded', '确认金额将超过密钥有效积分上限；请先调整限额再核账。',409)
     status = "settled" if actual_units else "released"
     wallet = _wallet(conn,hold["user_id"])
     if not _can_cover_charge(conn,hold,actual_units,wallet):
@@ -489,7 +495,11 @@ def settle_credit(conn: sqlite3.Connection, usage_id: int, actual_units: int | N
         reason = "Image usage exceeded the reserved token ceiling; authoritative cost retained for manual reconciliation."
     elif image_overrun:
         reason = "Image charge exceeded the reserved ceiling; manual reconciliation required."
-    if actual_units is None or image_overrun or image_modality_overrun or not _can_cover_charge(conn,hold,actual_units,_wallet(conn,hold["user_id"])):
+    from app.key_budget import key_charge_allowed
+    key_overrun = actual_units is not None and not key_charge_allowed(conn,hold,actual_units)
+    if key_overrun:
+        reason = 'Authoritative charge exceeds the current key budget; manual reconciliation required.'
+    if actual_units is None or key_overrun or image_overrun or image_modality_overrun or not _can_cover_charge(conn,hold,actual_units,_wallet(conn,hold["user_id"])):
         conn.execute("UPDATE credit_holds SET status='reconciliation_required',actual_units=?,usage_json=?,reason=?,updated_at=? WHERE usage_id=? AND status=?",
                      (actual_units,usage_json,reason,now_iso(),usage_id,hold["status"]))
         conn.execute("DELETE FROM credit_hold_watch WHERE usage_id=?", (usage_id,))

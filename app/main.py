@@ -44,6 +44,15 @@ class CachedStaticFiles(StaticFiles):
         return response
 
 
+async def optional_catalog(request: Request, call_next):
+    path = request.url.path
+    blocked = path in {"/apis", "/tester", "/admin/routes", "/api/public/routes", "/api/public/stats", "/logs"} or path.startswith(("/apis/", "/tester/", "/admin/routes/", "/api/public/v1/", "/api/catalog/"))
+    if not settings.api_catalog_enabled and blocked:
+        from app.utils.errors import json_error
+        return json_error(404, "catalog_disabled", "The API catalog is disabled.")
+    return await call_next(request)
+
+
 async def restrict_codexproxy_hostname(request: Request, call_next):
     host = request.headers.get("host", "").split(":", 1)[0].lower()
     if host == "cli.luomo.moe" and request.url.path != "/health" and not request.url.path.startswith("/v1/"):
@@ -132,6 +141,7 @@ def create_app() -> FastAPI:
     application.add_exception_handler(StarletteHTTPException, form_http_error)
     application.add_exception_handler(RequestValidationError, form_validation_error)
     application.mount("/static", CachedStaticFiles(directory=str(STATIC_DIR)), name="static")
+    application.middleware("http")(optional_catalog)
     application.middleware("http")(security_headers)
     application.middleware("http")(error_page_middleware)
     application.middleware("http")(restrict_codexproxy_hostname)

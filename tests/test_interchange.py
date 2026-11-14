@@ -268,7 +268,7 @@ class InterchangeTests(unittest.TestCase):
             self.assertIn('class="lamp off">暂未开放', page)
         self.assertIn('data-limit="6"', home)
         for station in ("luomo.moe", "file.luomo.moe", "ops.luomo.moe/servers", "misskey.march7th.cn"):
-            self.assertIn(station, home)
+            self.assertNotIn(station, home)
         from app.model_lines import board_state
         self.assertEqual(board_state("gpt-6-luna", True)["tone"], "ok")
         self.assertEqual(board_state("gpt-image-2", False)["tone"], "off")

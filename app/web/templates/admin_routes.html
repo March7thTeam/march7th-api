@@ -31,11 +31,11 @@
   <div class="card-body">
     <form method="post" action="/admin/routes" class="form two">
       <label class="field">名称<input name="name" required></label>
-      <label class="field">公开路径<input name="public_path" class="mono" placeholder="luomocore/health" pattern="[a-z0-9._~\-]+(/[a-z0-9._~\-]+)*" required><small>挂在 /api/public/v1/ 之下；小写字母、数字和 . _ ~ -，用 / 分段。</small></label>
+      <label class="field">公开路径<input name="public_path" class="mono" placeholder="service/health" pattern="[a-z0-9._~\-]+(/[a-z0-9._~\-]+)*" required><small>挂在 /api/public/v1/ 之下；小写字母、数字和 . _ ~ -，用 / 分段。</small></label>
       <label class="field">上游 API<select name="target_api_id" required>{% for api in apis %}<option value="{{ api.id }}">{{ api.name }} · {{ api.base_url }}</option>{% endfor %}</select></label>
       <label class="field">方法<select name="target_method">{% for method in methods %}<option value="{{ method }}">{{ method }}</option>{% endfor %}</select></label>
       <label class="field">上游路径<input name="target_path" class="mono" placeholder="/health" pattern="/.*" required><small>以 / 开头，不含协议和主机。</small></label>
-      <label class="field">所需权限（scope）<input name="required_scope" class="mono" placeholder="luomocore:health"><small>形如 name:action；匿名路由可留空。</small></label>
+      <label class="field">所需权限（scope）<input name="required_scope" class="mono" placeholder="service:health"><small>形如 name:action；匿名路由可留空。</small></label>
       <div class="wide checks"><label class="check"><input type="checkbox" name="enabled"> 立即启用</label><label class="check"><input type="checkbox" name="public_docs" checked> 在文档中显示</label><label class="check"><input type="checkbox" name="allow_anonymous"> 允许匿名访问</label></div>
       <div class="wide actions"><button class="btn primary" type="submit">新增路由</button><span class="muted small">新路由默认停用，核对后再启用。</span></div>
     </form>

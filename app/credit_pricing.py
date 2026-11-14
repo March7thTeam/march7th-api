@@ -1,5 +1,6 @@
 """Versioned official Standard token prices and exact decimal credit conversion."""
 from __future__ import annotations
+from app.price_store import exact_context
 
 import json
 import hashlib
@@ -33,11 +34,13 @@ class BillingQuote:
 
 
 def priced_models() -> list[str]:
-    return sorted(PRICE_DATA["models"])
+    from app.price_store import current_release
+    return sorted(current_release()["text"]["models"])
 
 
-def model_price(model: str) -> dict:
-    card = PRICE_DATA["models"].get(model)
+def model_price(model: str, data=None) -> dict:
+    from app.price_store import current_release
+    card = (data or current_release()["text"])["models"].get(model)
     if card is None or card.get("output") is None:
         raise PricingError("price_unavailable", "This model has no supported official text-generation price. Choose a priced text model.")
     return dict(card)
@@ -107,8 +110,13 @@ def checked_output_limit(payload: dict, *, protocol: str, default_output_tokens:
     return limit
 
 
+@exact_context
 def prepare_billable_request(payload: dict, *, protocol: str, default_output_tokens: int = DEFAULT_OUTPUT_TOKENS) -> tuple[dict, BillingQuote]:
-    card = model_price(payload["model"])
+    from app.price_store import current_release, conversion
+    release = current_release()
+    data = release["text"]
+    factors = conversion(release)
+    card = model_price(payload["model"], data)
     # Copy through JSON: neither the caller nor the quote may mutate after admission.
     outgoing = json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False))
     images = validate_image_inputs(outgoing, protocol)
@@ -150,9 +158,9 @@ def prepare_billable_request(payload: dict, *, protocol: str, default_output_tok
     prefix = "long_" if long else ""
     input_rate = max(Decimal(card[prefix+"input"]), Decimal(card[prefix+"cache_write"] or card[prefix+"input"]))
     output_rate = Decimal(card[prefix+"output"])
-    units = int(((input_bound * input_rate + limit * output_rate) * CREDITS_PER_USD).to_integral_value(rounding=ROUND_CEILING))
-    snapshot = {"version": PRICE_DATA["version"], "source": PRICE_DATA["source"], "model": payload["model"], "card": card,
-                "credits_per_usd": CREDITS_PER_USD, "input_bound": input_bound, "output_bound": limit}
+    units = int(((input_bound * input_rate + limit * output_rate) * Decimal(factors["credits_per_usd"])).to_integral_value(rounding=ROUND_CEILING))
+    snapshot = {"version": data["version"], "source": data["source"], "model": payload["model"], "card": card,
+                **factors, "input_bound": input_bound, "output_bound": limit}
     if images:
         snapshot.update(images=len(images), image_token_ceiling=IMAGE_INPUT_TOKEN_CEILING)
     return outgoing, BillingQuote(units, json.dumps(snapshot, separators=(",", ":")))
@@ -228,6 +236,7 @@ def _price_equivalent_snapshot(snap: dict, actual_model: Any) -> bool:
     return hashlib.sha256(canonical_card).hexdigest() == entry["price_card_sha256"]
 
 
+@exact_context
 def calculate_charge(snapshot: str, details: dict) -> int:
     snap = json.loads(snapshot)
     if snap.get("kind") == "image_generation":

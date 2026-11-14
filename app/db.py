@@ -250,6 +250,9 @@ def init_db() -> None:
         # Local import avoids coupling the accounting module to connection setup.
         from app.credit_ledger import initialize_credit_schema, recover_stale_usage
         initialize_credit_schema(conn)
+        # Numbered steps come after the idempotent baseline above; see app/migrations.py.
+        from app.migrations import apply_migrations
+        apply_migrations(conn)
         conn.commit()
         recover_stale_usage(conn, force=True)
 

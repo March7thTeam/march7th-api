@@ -22,6 +22,6 @@
 
 <div class="section-gap">{{ board(status, title='线路运行', more=False) }}</div>
 
-<div class="notice section-gap"><strong>探测范围</strong><p data-status-note>{{ status.note }}</p><p>本站所在的东京主机，由<a href="https://ops.luomo.moe/servers" rel="noopener">监控空间站</a>每分钟记录一次运行状况；这里只看网关自身与模型线路。</p><p>最近检查 <time class="mono" data-status-updated datetime="{{ status.updated_at }}">{{ status.updated_at|utc }}</time> UTC · 缓存 <span data-status-cache>{{ status.cache_seconds }}</span> 秒。本页不代表持续可用率，也不覆盖每个模型的生成能力。</p></div>
+<div class="notice section-gap"><strong>探测范围</strong><p data-status-note>{{ status.note }}</p><p>最近检查 <time class="mono" data-status-updated datetime="{{ status.updated_at }}">{{ status.updated_at[:16]|replace("T"," ") }}</time> UTC · 缓存 <span data-status-cache>{{ status.cache_seconds }}</span> 秒。本页不代表持续可用率，也不覆盖每个模型的生成能力。</p></div>
 <div class="actions"><a class="btn primary" href="/models">模型与调用示例 <span class="arrow" aria-hidden="true">→</span></a><a class="btn" href="/docs#errors">错误码</a></div>
 {% endblock %}

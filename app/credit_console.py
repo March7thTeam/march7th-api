@@ -19,6 +19,7 @@ from app.credit_ledger import (CreditError, add_credit, create_credit_code, cred
     recover_stale_holds, redeem_credit_code, resolve_credit_hold, revoke_credit_code,
     units_to_credits, wallet_snapshot)
 from app.db import connect
+from app.price_store import current_release, conversion
 
 router = APIRouter()
 from app.web.templating import templates
@@ -28,9 +29,10 @@ def _rows(conn,query,params=()):
     return [dict(row) for row in conn.execute(query,params).fetchall()]
 
 
-@lru_cache(maxsize=1)
-def _prices():
-    data=json.loads(Path(__file__).with_name("credit_prices.json").read_text(encoding="utf-8"))
+def _prices(release=None):
+    release=release or current_release()
+    data=release["text"]
+    factors=conversion(release)
     rows=[]
     with localcontext() as context:
         context.prec=80
@@ -38,9 +40,9 @@ def _prices():
             row={"model":model,**card}
             for field in ("input","cached_input","cache_write","output","long_input","long_cached_input","long_cache_write","long_output"):
                 value=card.get(field)
-                row[field+"_credits"]=format(Decimal(str(value))*Decimal(720),"f") if value is not None else None
+                row[field+"_credits"]=format(Decimal(str(value))*Decimal(factors["credits_per_usd"]),"f") if value is not None else None
             rows.append(row)
-    return {"models":rows,"version":data["version"],"source":data["source"],"retrieved_at":data.get("retrieved_at","")}
+    return {**factors,"models":rows,"version":data["version"],"source":data["source"],"retrieved_at":data.get("retrieved_at","")}
 
 
 def _view_rows(rows):
@@ -93,7 +95,7 @@ def _admin_page(request,user,*,error=None,message=None,new_code=None,status=200)
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='credit_payment_reviews'").fetchone():
             payment_reviews=_rows(conn,"SELECT r.*,o.user_id,o.credit_units,o.status order_status,u.username FROM credit_payment_reviews r JOIN credit_payment_orders o ON o.id=r.order_id JOIN users u ON u.id=o.user_id WHERE r.state='open' ORDER BY r.created_at")
         conn.commit()
-    return templates.TemplateResponse(request,"admin_credits.html",{"user":user,"users":users,"codes":codes,"holds":holds,"ledger":ledger,"audit":audit,"payment_reviews":payment_reviews,"new_code":new_code,"error":error,"message":message,"add_nonce":secrets.token_hex(24),"code_nonce":secrets.token_hex(24)},status_code=status,headers={"Cache-Control":"no-store"})
+    return templates.TemplateResponse(request,"admin_credits.html",{"user":user,"users":users,"codes":codes,"holds":holds,"ledger":ledger,"audit":audit,"payment_reviews":payment_reviews,"new_code":new_code,"error":error,"message":message,"conversion":conversion(),"add_nonce":secrets.token_hex(24),"code_nonce":secrets.token_hex(24)},status_code=status,headers={"Cache-Control":"no-store"})
 
 
 def _nonce(raw: str) -> str:
@@ -106,11 +108,12 @@ def _nonce(raw: str) -> str:
 async def pricing_page(request: Request,user=Depends(optional_user)):
     catalog=await snapshot()
     live={model["id"] for model in catalog["models"]}
-    prices=_prices()
+    release=current_release()
+    prices=_prices(release)
     lines=[row for row in prices["models"] if row["model"] in live]
     others=[row for row in prices["models"] if row["model"] not in live]
-    from app.image_generation import IMAGE_PRICES
-    return templates.TemplateResponse(request,"pricing.html",{"user":user,"prices":prices,"lines":lines,"others":others,"catalog":catalog,"image_prices":IMAGE_PRICES})
+    image_prices=release["image"]
+    return templates.TemplateResponse(request,"pricing.html",{"user":user,"prices":prices,"lines":lines,"others":others,"catalog":catalog,"image_prices":image_prices})
 
 
 @router.get("/developer/credits",response_class=HTMLResponse)
@@ -125,7 +128,7 @@ def credits_api(user=Depends(require_developer)):
         recover_stale_holds(conn)
         data=_wallet_data(conn,user["id"])
         conn.commit()
-    return JSONResponse({**data,"units_per_credit":1_000_000,"credits_per_cny":100,"credits_per_usd":720},headers={"Cache-Control":"no-store"})
+    return JSONResponse({**data,"units_per_credit":1_000_000,"credits_per_cny":100,**conversion()},headers={"Cache-Control":"no-store"})
 
 
 @router.post("/developer/credits/redeem",response_class=HTMLResponse)

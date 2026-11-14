@@ -14,7 +14,7 @@
 {% else %}
 <div class="playground image-playground">
   <section class="card">
-    <form id="image-form" class="form" autocomplete="off" data-model="{{ request.query_params.get('model', 'gpt-image-2') }}">
+    <form id="image-form" data-price-data="{{ image_price_data }}" data-credits-per-usd="{{ image_conversion.credits_per_usd }}" class="form" autocomplete="off" data-model="{{ request.query_params.get('model', 'gpt-image-2') }}">
       <label class="field">密钥<select id="image-key" required>{% for key in active_keys %}<option value="{{ key.id }}"{% if request.query_params.get('key', '') == key.id|string %} selected{% endif %}>{{ key.name }} · {{ key.key_prefix }}</option>{% endfor %}</select></label>
       <label class="field">模型<select id="image-model" required disabled></select><span id="image-model-status" class="hint" role="status">正在读取这把密钥可调用的图像模型…</span></label>
       <div class="form two">

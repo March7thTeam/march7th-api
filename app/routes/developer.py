@@ -3,6 +3,7 @@ import logging
 import re
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from app.config import settings
 from app.auth import require_developer
 from app.db import connect
 from app.email_verification import claim_verification_send, new_token_record, send_verification_email
@@ -27,7 +28,7 @@ def developer_home(request: Request, user=Depends(require_developer)):
         today = now_iso()[:10]
         usage_today = conn.execute("SELECT COUNT(*) AS c FROM api_usage_logs WHERE user_id = ? AND created_at LIKE ?", (user["id"], f"{today}%")).fetchone()["c"]
         recent = conn.execute("SELECT * FROM api_usage_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (user["id"],)).fetchall()
-        routes = conn.execute("SELECT * FROM public_gateway_routes WHERE public_docs = 1 ORDER BY public_path").fetchall()
+        routes = conn.execute("SELECT * FROM public_gateway_routes WHERE public_docs = 1 ORDER BY public_path").fetchall() if settings.api_catalog_enabled else []
         wallet = wallet_snapshot(conn, user["id"])
     usage = read_usage_summary(user["id"])
     return templates.TemplateResponse(request, "developer.html", {"user": user, "keys": keys, "usage_today": usage_today, "recent": recent, "routes": routes, "wallet": wallet, "usage": usage, "analytics": usage_analytics(user["id"], 14)})
@@ -72,12 +73,16 @@ def developer_keys(request: Request, user=Depends(require_developer), created: s
 
 
 @router.post("/developer/keys/request")
-def developer_key_request(request: Request, name: str = Form(...), key_nonce: str = Form(""), requested_scopes: str = Form(""), requested_reason: str = Form(""), user=Depends(require_developer)):
+def developer_key_request(request: Request, name: str = Form(...), key_nonce: str = Form(""), requested_scopes: str = Form(""), requested_reason: str = Form(""),
+                          credit_limit: str = Form(""), expires_on: str = Form(""), rate_limit_per_minute: str = Form("60"), models: str = Form(""), user=Depends(require_developer)):
     scopes = {s for s in re.split(r"[,\s]+", requested_scopes.strip()) if s}
     if scopes - {"models:read", "chat:completions", "responses:create", "images:generate"}:
         raise HTTPException(400, "自助密钥只支持 AI 协议权限；业务服务权限请联系管理员。")
+    from app.key_settings import parse_owner_limits, selectable_models
+    limits = parse_owner_limits(credit_limit=credit_limit, expires_on=expires_on, rpm=rate_limit_per_minute,
+                                models=re.split(r'[,\s]+', models.strip()) if models.strip() else selectable_models())
     with closing(connect()) as conn, conn:
-        result = issue_self_key(conn, user["id"], name, key_nonce)
+        result = issue_self_key(conn, user["id"], name, key_nonce, limits=limits if credit_limit.strip() or expires_on.strip() or rate_limit_per_minute != "60" or models.strip() else None)
     return templates.TemplateResponse(request, "developer_key_created.html", {"user": user, "result": result}, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
@@ -91,7 +96,37 @@ def developer_revoke_key(key_id: int, user=Depends(require_developer)):
 
 @router.get("/developer/logs", response_class=HTMLResponse)
 def developer_logs(request: Request, user=Depends(require_developer)):
-    with closing(connect()) as conn, conn:
-        logs = conn.execute("SELECT * FROM api_usage_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100", (user["id"],)).fetchall()
-    return templates.TemplateResponse(request, "developer_logs.html", {"user": user, "logs": logs})
+    from app.request_details import filtered_usage
+    params = {name:request.query_params.get(name,'') for name in ('model','protocol','billing','since','until','key_id','request_id')}
+    logs = filtered_usage(user, **params)
+    return templates.TemplateResponse(request, "developer_logs.html", {"user":user,"logs":logs})
 
+
+def _limits_page(request, user, key_id, *, error=None, saved=False, status=200):
+    from app.key_settings import selectable_models
+    key = next((item for item in key_views(user["id"]) if item["id"] == key_id), None)
+    if not key:
+        raise HTTPException(404, "密钥不存在。")
+    return templates.TemplateResponse(request, "developer_key_limits.html", {"user": user, "key": key,
+        "choices": selectable_models(), "error": error, "saved": saved}, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/developer/keys/{key_id}/limits", response_class=HTMLResponse)
+def developer_key_limits(request: Request, key_id: int, saved: str = "", user=Depends(require_developer)):
+    return _limits_page(request, user, key_id, saved=saved == "1")
+
+
+@router.post("/developer/keys/{key_id}/limits")
+async def developer_save_key_limits(request: Request, key_id: int, user=Depends(require_developer)):
+    from app.key_settings import parse_owner_limits, save_owner_limits
+    form = await request.form()
+    try:
+        limits = parse_owner_limits(credit_limit=str(form.get("credit_limit", "")), expires_on=str(form.get("expires_on", "")),
+                                    rpm=str(form.get("rate_limit_per_minute", "60")), models=[str(v) for v in form.getlist("models")])
+        with closing(connect()) as conn:
+            save_owner_limits(conn, user["id"], key_id, limits)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise
+        return _limits_page(request, user, key_id, error=exc.detail, status=exc.status_code)
+    return RedirectResponse(f"/developer/keys/{key_id}/limits?saved=1", status_code=303)

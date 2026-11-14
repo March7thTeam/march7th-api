@@ -1,18 +1,13 @@
 services:
-  luomoapi-hub:
+  march7th-api:
     build: .
-    container_name: luomoapi-hub
     restart: unless-stopped
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     volumes:
       - ./data:/app/data
     ports:
-      - "127.0.0.1:8790:8790"
-    networks:
-      - default
-      - luomocore_default
-
-networks:
-  luomocore_default:
-    external: true
+      - "${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8790}:8790"
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8790

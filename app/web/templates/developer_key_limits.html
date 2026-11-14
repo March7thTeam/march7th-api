@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}密钥限额 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Ticket rules · 限额</p><h1>{{ key.name }}</h1><p class="lead"><code>{{ key.key_prefix }}…</code> · 给这把密钥设上限后，贴进第三方客户端也不怕超支。保存后立即生效。</p></div><div class="actions"><a class="btn" href="/developer/keys">返回密钥列表</a></div></div>
+{% if saved %}<div class="notice success" role="status">限额已保存。</div>{% endif %}
+{% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+{% if key.budget %}<div class="notice"><strong>已用 {{ key.budget.committed_credits|credit }} / {{ key.budget.limit_credits|credit }} 积分</strong><p>含已结算和仍在冻结中的金额；剩余 {{ key.budget.remaining_credits|credit }} 积分。</p></div>{% endif %}
+{% if not key.owner_editable %}
+<div class="notice warn"><strong>这把密钥由管理员配置</strong><p>它带有自助签发以外的权限或策略，请联系管理员修改。</p></div>
+{% else %}
+<section class="card narrow-card">
+  <form class="form" method="post">
+    <div class="form two">
+      <label class="field">积分上限<input name="credit_limit" class="mono" inputmode="decimal" value="{{ key.owner_limit_credits or '' }}" placeholder="例如 500"><small>这把密钥累计最多花多少积分；留空仅移除自设上限；管理员限制始终生效。</small></label>
+      <label class="field">到期日期（UTC）<input name="expires_on" type="date" value="{{ key.owner_expires_at[:10] if key.owner_expires_at else '' }}"><small>当天 23:59:59 UTC 失效；留空表示不过期。</small></label>
+      <label class="field">每分钟请求数<input name="rate_limit_per_minute" type="number" min="1" max="60" value="{{ key.owner_rpm or 60 }}" required><small>最多 60。</small></label>
+    </div>
+    <fieldset><legend>可调用模型</legend><div class="checks">
+      {% for model in choices %}<label class="check"><input type="checkbox" name="models" value="{{ model }}" {{ 'checked' if model in key.models }}> <code>{{ model }}</code></label>{% endfor %}
+    </div></fieldset>
+    <div class="actions"><button type="submit" class="btn primary" data-busy="保存中…">保存限额</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

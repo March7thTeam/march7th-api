@@ -1,240 +1,76 @@
 # march7th api
 
-march7th api 是洛墨站的自托管 API 网关，线上运行于 <https://api.march7th.cn>。它同时做两件事：
+面向个人、小团队与社区的通用自托管模型网关。一个 OpenAI 兼容入口，配合账户、密钥权限、精确积分账本与可追溯请求回执。界面采用服务端 Jinja、原生 JavaScript 和严格 CSP，沿用“模型线路 / 换乘枢纽”的交互语言。
 
-- **模型换乘**：对外提供 OpenAI 兼容的 `/v1` 入口，按 key 授权模型、限速并用积分计费；
-- **API 目录**：管理员登记内部上游与固定路由，开发者申请带 scope 的 key，经 `/api/public/v1/...` 受控调用。
+支持 Chat Completions、Responses 的 JSON / SSE、调用方自行执行的 function / custom tools，以及可选的图像输入和文生图。费用只根据可靠用量结算；缺失、矛盾或超过允许预算的回执进入人工核账。项目不提供上游账户或免费模型额度。
 
-站点按“夜行线换乘枢纽”设计：模型是线路，状态页是发车表，API key 是乘车券，积分钱包是 IC 卡。控制台全中文。
+## Docker 快速开始
 
-## 功能一览
+需要 Docker Compose。默认部署拥有自己的网络，不依赖本站其他项目、外部 Docker 网络或固定容器名。
 
-| 模块 | 内容 |
-| --- | --- |
-| 模型网关 | `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`，支持 JSON 与 SSE 流式；其他 `/v1` 路径一律拒绝 |
-| 积分计费 | 先预留后结算的整数积分账本；价格表带版本（`app/credit_prices.json`）；兑换码；可选 Stripe Checkout 充值 |
-| API 目录 | 上游 API、端点、公开路由登记；key 申请与审批；每 key 的 scope、每分钟限制与日配额 |
-| 开发者控制台 | 自助创建模型 key、用量与日志、在线调试台（playground）、积分钱包 |
-| 管理后台 | 用户、key、路由、审批、积分发放与冻结处理、模型用量、日志 |
-| 公开页面 | 首页、模型线路、实时发车表 `/status`、价格 `/pricing`、文档 `/docs`、安全说明 `/security` |
-
-## 快速开始
-
-需要 Docker 与 Compose。示例 Compose 会接入外部网络 `luomocore_default`，第一次运行前先创建：
-
-```bash
-docker network create luomocore_default
+```sh
+git clone https://github.com/March7thTeam/march7th-api.git
+cd march7th-api
 cp .env.example .env
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-把生成的随机值写入 `.env` 的 `SESSION_SECRET`（至少 32 个字符，否则 `/ready` 返回 503）。然后设置管理员密码并启动：
-
-```bash
-mkdir -p data
 docker compose build
-docker compose run --rm luomoapi-hub python scripts/set_admin_password.py
+# 交互生成管理员密码摘要和随机 SESSION_SECRET，写回宿主机 .env。
+docker compose run --rm --no-deps -v "$PWD/.env:/app/.env" march7th-api python -m scripts.set_admin_password
+# 编辑 .env 中的公开地址、运营者信息和上游连接后启动。
 docker compose up -d
-curl http://127.0.0.1:8790/ready
+curl --fail http://localhost:8790/ready
 ```
 
-服务只映射到 `127.0.0.1:8790`。生产环境放在 HTTPS 反向代理或 Tunnel 之后，并按实际代理链设置 `TRUSTED_PROXY_PEERS`（见下文）。
+打开 `http://localhost:8790`，用刚刚配置的管理员登录。创建用户后可自助签发 API 密钥；管理员通过“积分运营”加分或发行兑换码。未配置上游时账户、后台和 `/ready` 仍可工作，模型页会如实显示未配置，不向任何本站集成发请求。默认端口只绑定宿主机回环地址；通过自己的 HTTPS 反向代理公开服务。
 
-## 调用模型
-
-OpenAI 官方 SDK 只需改 `base_url`：
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(base_url="https://api.march7th.cn/v1", api_key=os.environ["LUOMO_API_KEY"])
-response = client.responses.create(model="gpt-6-luna", input="你好")
-print(response.output_text)
-```
-
-```bash
-curl https://api.march7th.cn/v1/chat/completions \
-  -H "Authorization: Bearer $LUOMO_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model": "gpt-6-luna", "messages": [{"role": "user", "content": "你好"}]}'
-```
-
-上游地址由 `CODEXPROXY_BASE_URL` / `CODEXPROXY_API_KEY` 指定，可以是任意 OpenAI 兼容服务。`/api/public/ai-catalog` 返回公开的模型目录。
-
-### Key 类型
-
-| 类型 | 来源 | 说明 |
-| --- | --- | --- |
-| 自助模型 key | 开发者控制台 | scope 为 `models:read`、`chat:completions`、`responses:create`；按积分扣费。管理员可在 `/admin/ai-keys/{id}` 限定模型、RPM、日/月额度和到期时间 |
-| 目录 key | 申请后由管理员审批 | 用于 `/api/public/v1/...` 的路由调用，按 scope、速率和日配额放行 |
-| 管理员免计量 key | `scripts/issue_admin_unmetered_key.py` | 需要精确 scope `admin:unmetered`，且所有者必须是在职管理员；每次调用都实时复核 |
-
-Key 只在创建时显示一次，数据库只保存哈希。支持 `Authorization: Bearer` 与 `X-API-Key` 两种提交方式。
-
-### 积分规则
-
-- 1 元 = 100 积分，1 美元 = 720 积分；模型单价取自 OpenAI 官方 Standard 价格，按版本记录在 `app/credit_prices.json`。
-- 每次调用先在短事务里预留积分，连接关闭后才访问上游；完成后按上游返回的真实 token 用量结算，未用完的预留退回钱包。
-- 拿不到可靠用量、实际费用超出可用余额或回执冲突时，记录转为“待核”，由管理员在 `/admin/credits` 人工处理并留审计记录；系统不会自动透支。
-- 只有经过签名校验的 Stripe 回执才会入账；`CREDIT_PAYMENT_PROVIDER` 留空时不开放在线支付，可用兑换码或管理员发放。
-
-## 账户与服务端会话
-
-登录后访问 `/account` 可查看用户名、邮箱与验证状态、角色、注册时间，修改密码及管理活动设备。会话有效期仍为 12 小时，cookie 使用 `secrets.token_urlsafe(32)`；`user_sessions` 只保存 SHA-256 摘要。最近活动最多每 5 分钟写入一次。旧签名 cookie 不再接受，升级后用户需重新登录。
-
-- `POST /logout` 撤销当前会话；`POST /account/password` 校验当前密码及两次新密码（至少 10 字符，不得相同），成功后撤销其他会话。
-- `POST /account/sessions/{id}/revoke` 退出某个自己的设备；`POST /account/sessions/revoke-others` 退出其他全部设备。
-- `GET/POST /forgot-password` 按邮箱及来源 IP 原子限流；存在、不存在、限流及 SMTP 未配置时均显示同一提示。邮箱每小时最多 5 次，至少间隔 60 秒；来源每小时最多 120 次。
-- `GET/POST /reset-password?token=…` 使用 60 分钟内有效的一次性令牌，数据库只保存哈希。GET 不消费令牌；成功重置会使该用户全部重置令牌失效、撤销全部会话，跳转 `/login?reset=1`。页面使用 `no-store` 与 `no-referrer`。
-- 管理员将用户设为 `suspended` / `disabled` 时撤销全部会话，重新启用也不会复活旧 cookie。
-
-数据库迁移只新增表与索引，启动自动执行；保留已有用户、key 与账本数据。`SESSION_SECRET` 仍用于自助密钥及充值表单 nonce 等签名。
-
-## 控制台试用与用量分析
-
-`/developer/playground` 直接选择自己名下的有效 key，无需保存或粘贴原文。服务端登录开发者接口：
-
-```text
-POST /developer/playground/run
-Content-Type: application/json
-{"key_id": 123, "endpoint": "chat.completions", "payload": {"model": "gpt-6-luna", "messages": [{"role": "user", "content": "你好"}]}}
-GET /developer/playground/models?key_id=123
-```
-
-`endpoint` 也支持 `responses`。试用与 `/v1` 共用权限、模型白名单、限速、配额、积分预留、上游转发、SSE 和结算执行器。用量日志路径标识为 `developer/playground/run/{endpoint}`；会话与密钥归属在预留事务中再次检查。POST 受同源 Origin 校验保护。
-
-`GET /api/developer/usage/analytics?days=14` 返回自己的聚合；管理员使用 `GET /api/admin/usage/analytics?days=14` 获取全站聚合。`days` 仅支持 7 / 14 / 30。按 UTC 日补零，包含请求数、成功/失败/进行中、输入/输出 token 和 `credits` 十进制字符串；积分只统计 `credit_holds.status='settled'` 的 `actual_units`，不把预留或待核当作扣费。`by_model` / `by_key` 各列前 10，其余合并为“其他”。两接口均为 `Cache-Control: no-store`。开发者概览及用量页的 `analytics` 上下文提供 14 天数据，供后续服务端图表使用。
-
-## 图像输入（默认关闭）
-
-设置 `GATEWAY_IMAGE_INPUT=true` 后，`app/model_capabilities.json` 明确列出的已计价文本模型支持图像输入。`gpt-image-*` 与 `*codex-spark*` 不在清单中；未计价模型不能借此调用。公开目录 `/api/public/ai-catalog` 与 `/models` 的每个模型均带 `vision: bool`，表示模型能力，实际启用仍取决于环境变量。
-
-- Chat：在 `messages[].content[]` 中使用 `{"type":"image_url","image_url":{"url":"https://example.com/image.png","detail":"auto"}}`。
-- Responses：在 `input[].content[]` 中使用 `{"type":"input_image","image_url":"https://example.com/image.png","detail":"auto"}`。
-- `detail` 可省略，支持 `auto` / `low` / `high`。URL 仅允许 HTTPS 或 `data:image/(png|jpeg|webp|gif);base64,…`；每请求最多 16 张，data 解码后每张最多 8 MiB，总请求体仍最多 20 MiB。网关不自行下载图片。文件、音频、内置工具等仍拒绝。
-- 输入预留上界为：仅把图像字段中的 data URL 换成短占位符后的请求 UTF-8 字节数 + 4096 + 图像数 × 8000。按此合并上界判断长上下文价格，快照记录 `images` 和 `image_token_ceiling`。结算使用上游真实 token；图像请求实际费用超出预留即转人工待核，余额不足、缺失/冲突回执也进入既有待核流程，不改变价格表版本或允许透支。
-
-## API 目录网关
-
-```bash
-curl https://api.example.com/api/public/v1/demo/status \
-  -H "Authorization: Bearer <api-key>"
-```
-
-调用方不能提交目标 URL：每条公开路径在数据库中绑定一个已登记的 API、HTTPS base URL、固定方法和固定目标路径。匿名路由需要管理员逐条开启。完整路由模型见 [docs/GATEWAY.md](docs/GATEWAY.md)。
-
-## 安全设计
-
-- **SSRF 防护**：上游只允许 HTTPS、不含用户信息；字面 IP 与全部 DNS 解析结果都必须是公网地址，并把请求钉到已校验的地址；不跟随重定向。
-- **有界传输**：请求体上限 20 MB，响应上限 100 MB；上游客户端不保存、不转发 Cookie。
-- **登录限流**：15 分钟窗口内，单账号最多 8 次失败、单来源最多 40 次；每次尝试先原子占位，并发请求也无法绕过。
-- **真实来源识别**：只信任 `TRUSTED_PROXY_PEERS` 中代理传来的 `X-Forwarded-For`，其余一律按直连地址处理。
-- **日志脱敏**：记录路径、耗时、状态码、IP 哈希与截断预览；`token`、`password`、`secret`、`key`、`cookie` 及授权字段会被掩码。
-- **页面**：CSP 无内联样式；静态资源带内容指纹，可长期缓存。
-
-漏洞报告方式见 [SECURITY.md](SECURITY.md)。
+`SESSION_SECRET` 至少 32 字符。不要将 `.env`、数据库或 API 密钥提交到代码库。反向代理后按真实代理地址设置 `TRUSTED_PROXY_PEERS`；不要随意信任整个公网。应用不开放自动 OpenAPI，静态 `/llms.txt` 提供入口说明。
 
 ## 配置
 
-完整列表见 [.env.example](.env.example)。常用项：
-
-| 变量 | 作用 |
+| 变量 | 用途 / 默认 |
 | --- | --- |
-| `SESSION_SECRET` | 表单 nonce 等服务端签名密钥，至少 32 个字符；会话 cookie 本身为不透明随机令牌 |
-| `APP_BASE_URL` | 对外地址，用于邮件链接和页面展示 |
-| `DATABASE_PATH` | SQLite 路径，默认 `/app/data/luomoapi.db` |
-| `TRUSTED_PROXY_PEERS` | 可信反向代理地址，逗号分隔；默认 `127.0.0.1,::1,172.20.0.1` |
-| `CODEXPROXY_BASE_URL` / `CODEXPROXY_API_KEY` | 模型网关的 OpenAI 兼容上游 |
-| `CREDIT_PAYMENT_PROVIDER` / `CREDIT_STRIPE_*` | 在线充值，留空即关闭 |
-| `GATEWAY_IMAGE_INPUT` | 默认 `false`；仅为能力清单中已计价文本模型开放图像输入 |
-| `SMTP_*` | 注册邮箱验证及找回密码邮件 |
-| `SECURITY_CONTACT` | `/.well-known/security.txt` 的联系方式 |
+| `APP_NAME` / `APP_BASE_URL` | 品牌名 `march7th api` / `http://localhost:8790` |
+| `OPERATOR_NAME` / `OPERATOR_URL` | 运营者显示名与可选网址 |
+| `PUBLIC_DESCRIPTION` | 首页与默认元描述文案 |
+| `FOOTER_LINKS` | 链接数组，例如 `[{"label":"主页","url":"https://example.com"}]` |
+| `API_CATALOG_ENABLED` | 默认 `true`，控制可选业务 API 目录；`false` 隐藏目录导航、页面、公开目录 JSON 与业务目录网关并返回 404。AI `/v1` 保持独立 |
+| `UPSTREAM_BASE_URL` / `UPSTREAM_API_KEY` | OpenAI 兼容上游，地址不含 `/v1`；密钥仅保存在服务端 |
+| `ADMIN_USERNAME` / `ADMIN_EMAIL` | 初始化管理员，默认 `admin` / `admin@example.com` |
+| `DATABASE_PATH` | 默认 `/app/data/luomoapi.db`；保留历史文件名以兼容既有部署 |
+| `SECURITY_CONTACT` | 安全报告邮箱；新部署请配置自己的联系地址 |
+| `USD_TO_CNY` / `BILLING_MULTIPLIER` | **仅首次价格发行种子**，默认 `7.2` / `1`；后续通过价格 CLI 导入并启用版本 |
+| `MODEL_VERIFICATION_PATH` | 可选的本部署模型实测记录 JSON 路径。默认不加载项目历史实测文件 |
 
-## 健康检查与公开接口
+`CODEXPROXY_BASE_URL` / `CODEXPROXY_API_KEY` 继续兼容；设置 `UPSTREAM_*` 后以规范变量为准，包括显式空值。旧集成变量继续支持，但 AstrBot、LuomoCore 等地址默认留空，只有显式配置时才建立相应目录种子。`APP_BASE_URL`、运营者网址与页脚网址必须为没有凭据、查询参数、片段的 HTTP(S) 绝对地址。配置修改需要重启。
 
-```text
-GET /health                 进程存活
-GET /ready                  数据库表、会话密钥检查；未就绪返回 503
-GET /api/public/status      实时发车表数据
-GET /api/public/ai-catalog  公开模型目录
-GET /api/public/stats       公开路由统计
-GET /api/public/routes      公开路由列表
-GET /.well-known/security.txt
+SMTP 未配置时邮件功能不可用，但用户可注册并调用。支付、图片输入、图像生成、原生 Responses 都是独立可选能力；详见 [.env.example](.env.example)、[网关契约](docs/GATEWAY.md)、[图像生成](docs/IMAGE_GENERATION.md)。原生 Responses 和 Images API 的官方服务端凭据与通用上游凭据相互独立。
+
+## 可运营计价
+
+[价格版本与运营](docs/SELF_HOSTING.md#价格发行)包含完整命令。文本与图像 JSON 只用于新数据库的首次种子，运行中使用数据库当前发行版本。每次冻结保存价格卡、发行版本、来源、汇率与倍率；之后调价不改变旧请求的结算依据。
+
+积分最小单位是百万分之一，账务使用整数与高精度 Decimal。人民币充值合同固定为 **¥1 = 100 积分**，已有支付订单、退款保持原合同。模型费用换算为 `美元单价 × USD_TO_CNY × 100 × BILLING_MULTIPLIER`；管理员按美元发放积分使用基础汇率 `USD_TO_CNY × 100`，不加模型倍率。页面会公开本次发行的汇率、倍率和单价。
+
+密钥所有者可设总积分上限、到期日、RPM 与模型子集。用户限制独立叠加管理员限制，不能移除管理员设定；预留与结算都在同一数据库写事务中检查已结算、在途与待核金额。钱包余额不会透支。可信费用超出有效密钥上限会留待核，管理员需先明确调整限制才能核账，不静默截断或多扣。
+
+## 客户端接入与请求排查
+
+客户端地址填写 `https://你的域名/v1`，认证使用 `Authorization: Bearer YOUR_API_KEY`。支持 Python / JavaScript OpenAI SDK 和兼容客户端。在线试用提供页内多轮、输出上限、推理强度、温度与占位密钥 cURL；对话只留在当前页面内存。手动工具调用可通过 API 使用，网页不会执行工具。
+
+每次响应保留 `X-Request-ID`。用户只能查看自己的回执，管理员可看全站；用量页的详情链接使用内部记录编号，避免调用方重复请求 ID 导致历史详情串行。`GET /api/developer/requests/{request_id}` 需要登录会话，默认取当前可见范围内最新一条；可附 `?usage_id=123` 精确匹配。API Key 本身不能读取网页会话回执。筛选与 CSV 支持请求 ID、模型、协议、密钥、计费状态和 UTC 日期；CSV 最多导出 10,000 条并防公式注入。
+
+[客户端示例](docs/CLIENTS.md) · [错误码](docs/ERROR_CODES.md) · [升级、迁移与回退](docs/SELF_HOSTING.md) · [更新日志](CHANGELOG.md) · [路线图](ROADMAP.md)
+
+## 本地开发与测试
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt -c requirements.lock
+cp .env.example .env
+.venv/bin/python -m scripts.set_admin_password
+# 本地数据库路径应覆盖容器默认值。
+DATABASE_PATH=./data/local.db .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8790
+.venv/bin/python -m unittest discover -s tests
+.venv/bin/python -m compileall -q app scripts tests
 ```
 
-## 目录结构
-
-```text
-app/
-  main.py                 create_app、lifespan、中间件与静态资源
-  routes/                 public、auth、account、developer、admin、catalog_admin 路由
-  auth.py                 服务端会话、密码哈希、权限依赖
-  cliproxy_gateway.py     /v1 模型网关
-  public_gateway_secure.py  目录网关与共享的 key / 配额 / 日志工具
-  upstream_security.py    上游解析与地址钉定
-  ai_*.py                 模型目录、key 策略、用量统计、控制台
-  credit_*.py             积分账本、定价、支付、积分控制台
-  image_input.py          图像形状、URL、大小与计价输入上界
-  model_capabilities.json  显式模型图像输入能力清单
-  login_throttle.py       登录限流
-  client_ip.py            可信代理与真实来源
-  web/templates/          Jinja2 模板
-  web/static/             interchange.css、前端脚本、字体
-scripts/                  运维脚本
-tests/                    unittest 测试
-docs/GATEWAY.md           路由模型说明
-```
-
-## 运维脚本
-
-| 脚本 | 用途 |
-| --- | --- |
-| `scripts/init_db.py` | 初始化数据库结构 |
-| `scripts/set_admin_password.py` | 交互式设置管理员密码 |
-| `scripts/seed_default_apis.py` | 写入示例 API 目录 |
-| `scripts/create_admin_api_key.py` | 创建管理员目录 key |
-| `scripts/issue_admin_unmetered_key.py` | 签发管理员免计量模型 key，原文只写入服务器私有文件 |
-| `scripts/admin_ops.py` | 受控维护操作 |
-| `scripts/test_smtp.py` | 检查邮件配置 |
-| `scripts/credit_browser_fixture.py` | 本地一次性浏览器测试环境，不连接真实上游与邮件 |
-| `scripts/credit_candidate_probe.py` | 对隔离候选库做有界的真实上游验收 |
-
-`data/`、`output/`、`.env` 与备份目录已在 `.gitignore` 中排除。
-
-本地夹具启动：`.venv/bin/python scripts/credit_browser_fixture.py`，仅监听 `127.0.0.1:8793`。数据库位于项目内 `output/browser-fixture.sqlite`。提供管理员 `qa_admin`、开发者 `qa_dev`（3 把 key、跨 14 天 60 条成功/失败与多模型的已结算用量）、兼容账号 `qa_registered`、2 条公开文档路由；夹具密码均为 `FixtureOnly-2026`。路由及其假上游默认停用，邮件/支付/模型上游凭据在进程内清空，重复运行不重复加分或播种用量。夹具只用于本地。
-
-## 开发与测试
-
-```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt -c requirements.lock
-python -m unittest discover -s tests
-```
-
-测试使用临时数据库和假上游，不需要网络与真实密钥。CI（`.github/workflows/ci.yml`）在 Python 3.12 上执行 compileall、应用导入和完整测试。
-
-## License
-
-[MIT](LICENSE) © 2026 Luomo
-
-### 图像生成
-
-启用 `GATEWAY_IMAGE_GENERATION=true` 并设置服务端 `GATEWAY_IMAGE_API_KEY` 后，
-`POST /v1/images/generations` 通过固定的官方 OpenAI Images API 支持
-`gpt-image-2`、`gpt-image-1.5` 文生图，每次一张 PNG。文本请求仍使用 CodexProxy；
-`GATEWAY_IMAGE_INPUT` 独立控制已有文本模型的图像输入。
-
-新自助密钥包含 `images:generate` 和已计价图像模型，已有密钥权限保持原样。
-图像调用复用原有账户、模型白名单、配额、积分冻结与失败恢复流程，价格使用
-独立 `app/image_generation_prices.json` 版本。登录 `/developer/images` 可预览下载，
-参数、计费与服务端 SDK 示例见 [图像生成说明](docs/IMAGE_GENERATION.md)。
-
-
-### Responses 工具与输出预算
-
-开启原生 Responses 后，`app/text_model_capabilities.json` 中22个明确型号直接走
-官方 Responses，保留工具、推理和 `max_output_tokens`。同一能力表限制自动与显式
-输出预算：4o-mini 不会再默认请求32768；超上限显式值会在派发前400。
-工具验证与纯文本历史验证分开显示。可运行 `scripts/issue8_contract_probe.py`
-执行真实契约验收，具体环境变量、隔离账本和JSON输出见 `docs/GATEWAY.md`。
+测试使用临时数据库和假上游，不代表真实上游或支付端到端通过。公开状态仅探测应用、数据库和模型目录，不代表生成成功或长期可用率。运营者应针对自己的上游验证模型和工具，不能把仓库内历史实测记录当作新部署证据。

@@ -10,7 +10,7 @@
       <label class="check"><input type="radio" name="model_policy" value="allowlist" {{ 'checked' if key.model_policy == 'allowlist' }}> 仅允许下方模型</label>
       <label class="check"><input type="radio" name="model_policy" value="all" {{ 'checked' if key.model_policy == 'all' }}> 允许所有模型（包括未来新增）</label>
     </fieldset>
-    <label class="field">模型 ID（逗号或换行分隔）<textarea name="models" class="mono" rows="5">{{ key.models|join('\n') }}</textarea><small>使用白名单时，空列表表示没有任何模型权限。<a href="/models">查看模型目录</a>。</small></label>
+    <label class="field">模型 ID（逗号或换行分隔）<textarea name="models" class="mono" rows="5">{{ key.admin_models|join('\n') }}</textarea><small>使用白名单时，空列表表示没有任何模型权限。<a href="/models">查看模型目录</a>。</small></label>
     <div class="form two">
       <label class="field">每分钟请求数<input type="number" name="rate_limit_per_minute" min="0" value="{{ key.rate_limit_per_minute }}" required></label>
       <label class="field">每日请求数<input type="number" name="daily_quota" min="0" value="{{ key.daily_quota }}" required></label>

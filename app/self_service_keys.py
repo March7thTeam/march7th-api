@@ -32,7 +32,7 @@ def self_key_nonce(user_id):
     return nonce + "." + _signature(user_id, nonce)
 
 
-def issue_self_key(conn, user_id, name, nonce):
+def issue_self_key(conn, user_id, name, nonce, *, limits=None):
     name = name.strip()
     if not 1 <= len(name) <= 100:
         raise HTTPException(400, "密钥名称需为 1–100 字符。")
@@ -59,6 +59,10 @@ def issue_self_key(conn, user_id, name, nonce):
         VALUES (?,?,?,?,'active',?,'','allowlist',60,0,0,?,?)""", (user_id,name,prefix,encoded,SELF_SCOPES,now,now))
     key_id = cur.lastrowid
     conn.executemany("INSERT INTO api_key_models(api_key_id,model_id) VALUES (?,?)", [(key_id,m) for m in priced_models() + image_models()])
+    if limits:
+        import json
+        conn.execute('UPDATE api_keys SET owner_credit_limit_units=?,owner_expires_at=?,owner_rpm=?,owner_models_json=? WHERE id=?',
+                     (limits['credit_limit_units'],limits['expires_at'],limits['rate_limit_per_minute'],json.dumps(limits['models']),key_id))
     conn.execute("INSERT INTO self_key_claims(user_id,nonce_hash,key_id,created_at) VALUES (?,?,?,?)", (user_id,digest,key_id,now))
     conn.execute("""INSERT INTO api_key_requests(user_id,name,requested_scopes,requested_reason,status,admin_note,created_at,reviewed_at)
         VALUES (?,?,?,'注册用户积分自助签发','approved','无需管理员审核；AI 调用按用户积分结算',?,?)""", (user_id,name,SELF_SCOPES,now,now))

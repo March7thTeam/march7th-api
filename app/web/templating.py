@@ -64,8 +64,12 @@ def utc(value) -> str:
     """Compact ISO timestamp for tables: 2026-10-18 07:12."""
     if not value:
         return "—"
-    text = str(value).replace("T", " ")
-    return text[:16] if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text) else text
+    from markupsafe import Markup, escape
+    raw = str(value)
+    text = raw.replace("T", " ")
+    if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text):
+        return Markup('<time datetime="{}" data-local-time title="{} UTC">{}</time>').format(raw, raw, text[:16])
+    return text
 
 
 def credit(value) -> str:
@@ -87,6 +91,11 @@ templates.env.globals.update(
     app_name=settings.app_name,
     app_base_url=settings.app_base_url,
     app_authority=settings.app_authority,
+    operator_name=settings.operator_name,
+    operator_url=settings.operator_url,
+    public_description=settings.public_description,
+    footer_links=settings.footer_links,
+    api_catalog_enabled=settings.api_catalog_enabled,
 )
 def device(user_agent) -> str:
     """Readable "browser · OS" for the account device list; the raw string stays in the title."""

@@ -66,7 +66,9 @@ def _identity_matches(requested: str, actual: object) -> bool:
     if actual == requested:
         return True
     try:
-        snapshot = {'model': requested, 'version': PRICE_DATA['version'], 'card': model_price(requested)}
+        from app.price_store import current_release
+        text = current_release()['text']
+        snapshot = {'model': requested, 'version': text['version'], 'card': model_price(requested, text)}
         return _price_equivalent_snapshot(snapshot, actual)
     except (KeyError, TypeError, ValueError, PricingError):
         return False

@@ -1,3 +1,6 @@
+import json
+from datetime import datetime, timezone
+from app.price_store import current_release, conversion
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
@@ -27,9 +30,25 @@ async def public_catalog():
 
 
 def key_views(user_id=None):
+    from app.key_budget import key_budget
+    from app.key_settings import owner_editable, selectable_models
+    from app.credit_ledger import units_to_credits
     with connect() as conn:
-        rows = conn.execute("SELECT id,user_id,name,key_prefix,status,scopes,allowed_routes,model_policy,rate_limit_per_minute,daily_quota,monthly_quota,expires_at,last_used_at FROM api_keys" + (" WHERE user_id=?" if user_id is not None else "") + " ORDER BY created_at DESC", (user_id,) if user_id is not None else ()).fetchall()
-        return [{**dict(row), "models": get_key_models(conn, row["id"])} for row in rows]
+        rows = conn.execute("SELECT id,user_id,name,key_prefix,status,scopes,allowed_routes,model_policy,rate_limit_per_minute,daily_quota,monthly_quota,expires_at,last_used_at,credit_limit_units,owner_credit_limit_units,owner_rpm,owner_expires_at,owner_models_json FROM api_keys" + (" WHERE user_id=?" if user_id is not None else "") + " ORDER BY created_at DESC", (user_id,) if user_id is not None else ()).fetchall()
+        views = []
+        for row in rows:
+            budget = key_budget(conn, row)
+            if budget:
+                budget = {**budget, **{k.replace("_units", "_credits"): units_to_credits(v) for k, v in budget.items()},
+                          "percent": min(100, round(100 * budget["committed_units"] / budget["limit_units"], 1))}
+            from app.key_settings import effective_model_ids
+            effective = effective_model_ids(conn, row)
+            from app.ai_usage import _parse_datetime
+            expiries = [value for value in (row['expires_at'], row['owner_expires_at']) if value]
+            effective_expiry = min(expiries, key=lambda value: _parse_datetime(value) or datetime.min.replace(tzinfo=timezone.utc)) if expiries else None
+            views.append({**dict(row), "models": sorted(effective) if effective is not None else selectable_models(), "budget": budget,
+                          "effective_expires_at": effective_expiry, "admin_models": get_key_models(conn,row["id"]), "owner_limit_credits": units_to_credits(row["owner_credit_limit_units"]) if row["owner_credit_limit_units"] else "", "owner_editable": owner_editable(row)})
+        return views
 
 
 def _page_days(value: str | None) -> int:
@@ -65,8 +84,9 @@ async def playground(request: Request, user=Depends(require_developer)):
 @router.get("/developer/images", response_class=HTMLResponse)
 async def image_playground(request: Request, user=Depends(require_developer)):
     from app.image_generation import image_generation_available
+    release = current_release()
     return templates.TemplateResponse(request, "ai_images.html", {"user": user, "keys": key_views(user["id"]),
-        "image_generation_enabled": image_generation_available()})
+        "image_generation_enabled": image_generation_available(), "image_price_data": json.dumps(release), "image_conversion": conversion(release)})
 
 
 @router.post("/developer/images/download")

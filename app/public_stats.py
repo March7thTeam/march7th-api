@@ -1,3 +1,5 @@
+import os
+from app.price_store import conversion
 from datetime import datetime, timedelta, timezone
 from contextlib import closing
 from typing import Any
@@ -20,6 +22,8 @@ PUBLIC_PAGE_PATHS = ("/", "/docs", "/models", "/pricing", "/status")
 
 
 def get_public_route_stats() -> dict[str, int]:
+    if not settings.api_catalog_enabled:
+        return dict(EMPTY_STATS)
     try:
         with closing(connect()) as conn:
             row = conn.execute(
@@ -32,6 +36,8 @@ def get_public_route_stats() -> dict[str, int]:
 
 
 def get_public_routes() -> list[dict[str, Any]]:
+    if not settings.api_catalog_enabled:
+        return []
     try:
         with closing(connect()) as conn:
             rows = conn.execute(
@@ -113,8 +119,7 @@ def well_known_security_txt():
 def security_text() -> str:
     return "\n".join(
         [
-            "Contact: mailto:security@luomo.moe",
-            "Contact: mailto:luomo0712@qq.com",
+            "Contact: mailto:" + os.getenv('SECURITY_CONTACT', 'security@example.com').removeprefix('mailto:'),
             "Preferred-Languages: zh, en",
             # RFC 9116 requires Expires; roll it forward so the file never goes stale.
             f"Expires: {(datetime.now(timezone.utc) + timedelta(days=180)).strftime('%Y-%m-%dT00:00:00Z')}",
@@ -122,7 +127,7 @@ def security_text() -> str:
             f"Policy: {settings.app_base_url}/security",
             "",
             f"Scope: {settings.app_authority} public portal, developer console, API key gateway, and {settings.app_name} account flows.",
-            f"Out of scope: denial-of-service testing, social engineering, credential stuffing, destructive testing, and attempts against SSH, firewall, Cloudflare records outside {settings.app_authority}, or unrelated Luomo services.",
+            f"Out of scope: denial-of-service testing, social engineering, credential stuffing, destructive testing, and attempts against SSH, firewall, Cloudflare records outside {settings.app_authority}, or unrelated services.",
             "Please do not include secrets, API keys, passwords, cookies, or private user data in reports.",
             "",
         ]
@@ -133,10 +138,15 @@ def security_text() -> str:
 async def public_home(request: Request, user=Depends(optional_user)):
     # Route lookups are synchronous SQLite reads; keep them off the event loop.
     routes, stats = await run_in_threadpool(lambda: (get_public_routes(), get_public_route_stats()))
-    return templates.TemplateResponse(request, "index.html", {"user": user, "catalog": await snapshot(), "routes": routes, **stats})
+    return templates.TemplateResponse(request, "index.html", {"user": user, "catalog": await snapshot(), "routes": routes, **stats, "conversion": conversion()})
 
 
 @router.get("/docs")
 async def public_docs(request: Request, user=Depends(optional_user)):
     routes, stats = await run_in_threadpool(lambda: (get_public_routes(), get_public_route_stats()))
-    return templates.TemplateResponse(request, "docs.html", {"user": user, "catalog": await snapshot(), "routes": routes, **stats})
+    return templates.TemplateResponse(request, "docs.html", {"user": user, "catalog": await snapshot(), "routes": routes, **stats, "conversion": conversion()})
+
+
+@router.api_route('/llms.txt', methods=['GET','HEAD'], response_class=PlainTextResponse)
+def llms_txt():
+    return (STATIC_DIR/'llms.txt').read_text(encoding='utf-8')
