@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from app.config import upstream_api_key
+from app.config import upstream_api_key, upstream_base_url
 import anyio
 from fastapi import APIRouter, Depends, Request, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -341,7 +341,7 @@ def parse_json_body(body: bytes) -> dict[str, Any]:
 
 
 def _upstream_base() -> str:
-    return os.getenv("CODEXPROXY_BASE_URL", "http://codex-proxy:8317").rstrip("/")
+    return upstream_base_url()
 
 
 def _upstream_key() -> str:

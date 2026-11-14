@@ -44,6 +44,12 @@ LABELS = {
     "configured": "已配置", "missing": "未配置", "exists": "存在",
     "operational": "正常", "degraded": "异常",
     "enabled": "已启用", "redeemed": "已兑换",
+    "succeeded": "成功", "completed": "完成", "failed": "失败", "in_flight": "进行中",
+    "settled": "已结算", "released": "已释放", "held": "已冻结", "reserved": "已冻结",
+    "reconciliation_required": "待人工核账", "admin_exempt": "管理员免计费",
+    "legacy_unbilled": "历史未计费", "unbilled": "未计费", "not_billable": "无需计费",
+    "timeout": "超时", "upstream_error": "上游异常", "gateway_error": "网关异常",
+    "streamerror": "流式异常", "stream_incomplete": "流未完整结束", "client_disconnect": "客户端已断开",
 }
 TONES = {
     "active": "ok", "approved": "ok", "configured": "ok", "exists": "ok", "operational": "ok", "enabled": "ok",

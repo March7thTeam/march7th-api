@@ -48,9 +48,9 @@ def model_price(model: str, data=None) -> dict:
 
 def protected_ai_target(base_url: str, path: str) -> bool:
     """Generic/tester routes must not bypass the metered generation executor."""
-    from app.config import settings
+    from app.config import upstream_base_url
     host = (urlsplit(base_url).hostname or "").lower()
-    upstream_host = (urlsplit(settings.codexproxy_base_url).hostname or "").lower()
+    upstream_host = (urlsplit(upstream_base_url()).hostname or "").lower()
     target = urlsplit(urlsplit(base_url).path.rstrip("/") + "/" + path.lstrip("/")).path
     for _ in range(3):
         target = unquote(target)

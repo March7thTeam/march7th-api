@@ -20,8 +20,11 @@ FIELDS = ('id','request_id','api_key_id','protocol','model','status_code','outco
 
 def receipt(user, request_id=None, *, usage_id=None):
     with closing(connect()) as conn:
+        conn.execute("BEGIN")
         conditions, args = [], []
         if request_id is not None:
+            if not 1 <= len(request_id) <= 128 or any(ord(char) < 0x20 or ord(char) == 0x7f for char in request_id):
+                raise HTTPException(400, '请求 ID 必须为 1–128 个可打印字符。')
             conditions.append('request_id=?'); args.append(request_id)
         if usage_id is not None:
             conditions.append('id=?'); args.append(usage_id)
@@ -35,6 +38,7 @@ def receipt(user, request_id=None, *, usage_id=None):
         result = dict(row)
         hold = conn.execute('SELECT status,dispatch_state,amount_units,actual_units,pricing_snapshot,created_at,dispatched_at,updated_at FROM credit_holds WHERE usage_id=?', (row['id'],)).fetchone()
         entries = [dict(r) for r in conn.execute('SELECT kind,delta_units,delta_reserved_units,created_at FROM credit_ledger WHERE usage_id=? ORDER BY id', (row['id'],))]
+        conn.commit()
     result['billing_status'] = result['credit_status']
     result['ledger'] = entries
     result['hold'] = dict(hold) if hold else None
@@ -57,7 +61,12 @@ def receipt(user, request_id=None, *, usage_id=None):
     return result
 
 
-@router.get('/api/developer/requests/{request_id}')
+@router.get('/api/developer/requests')
+def receipt_query(request_id: str, usage_id: int | None = None, user=Depends(require_developer)):
+    return JSONResponse(receipt(user, request_id, usage_id=usage_id), headers={'Cache-Control':'no-store'})
+
+
+@router.get('/api/developer/requests/{request_id:path}')
 def receipt_json(request_id: str, usage_id: int | None = None, user=Depends(require_developer)):
     return JSONResponse(receipt(user, request_id, usage_id=usage_id), headers={'Cache-Control':'no-store'})
 
@@ -69,7 +78,7 @@ def exact_receipt_page(request: Request, usage_id: int, user=Depends(require_dev
         'snapshot_json':json.dumps(data['pricing_snapshot'],ensure_ascii=False,indent=2)}, headers={'Cache-Control':'no-store'})
 
 
-@router.get('/developer/requests/{request_id}', response_class=HTMLResponse)
+@router.get('/developer/requests/{request_id:path}', response_class=HTMLResponse)
 def receipt_page(request: Request, request_id: str, user=Depends(require_developer)):
     data = receipt(user, request_id)
     return templates.TemplateResponse(request, 'request_detail.html', {'user':user,'receipt':data,
@@ -84,7 +93,8 @@ def filtered_usage(user, *, model='', protocol='', billing='', since='', until='
                                   ('credit_status',billing,{'held','settled','released','reconciliation_required','admin_exempt','not_billable','legacy_unbilled','unbilled'})]:
         if not value:
             continue
-        if len(value)>120 or (choices and value not in choices):
+        maximum = 128 if field == 'request_id' else 120
+        if len(value)>maximum or (choices and value not in choices):
             raise HTTPException(400,'筛选值无效。')
         conditions.append(field+'=?'); args.append(value)
     for raw, operator in [(since,'>='),(until,'<=')]:

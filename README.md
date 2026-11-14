@@ -56,7 +56,7 @@ SMTP 未配置时邮件功能不可用，但用户可注册并调用。支付、
 
 客户端地址填写 `https://你的域名/v1`，认证使用 `Authorization: Bearer YOUR_API_KEY`。支持 Python / JavaScript OpenAI SDK 和兼容客户端。在线试用提供页内多轮、输出上限、推理强度、温度与占位密钥 cURL；对话只留在当前页面内存。手动工具调用可通过 API 使用，网页不会执行工具。
 
-每次响应保留 `X-Request-ID`。用户只能查看自己的回执，管理员可看全站；用量页的详情链接使用内部记录编号，避免调用方重复请求 ID 导致历史详情串行。`GET /api/developer/requests/{request_id}` 需要登录会话，默认取当前可见范围内最新一条；可附 `?usage_id=123` 精确匹配。API Key 本身不能读取网页会话回执。筛选与 CSV 支持请求 ID、模型、协议、密钥、计费状态和 UTC 日期；CSV 最多导出 10,000 条并防公式注入。
+每次响应保留 `X-Request-ID`。用户只能查看自己的回执，管理员可看全站；用量页的详情链接使用内部记录编号，避免调用方重复请求 ID 导致历史详情串行。`GET /api/developer/requests?request_id=...` 需要登录会话，支持含斜杠等分隔符的 1–128 字符请求 ID（参数需要 URL 编码），默认取当前可见范围内最新一条；可附 `&usage_id=123` 精确匹配。旧路径 `/api/developer/requests/{request_id}` 保持兼容。API Key 本身不能读取网页会话回执。筛选与 CSV 支持请求 ID、模型、协议、密钥、计费状态和 UTC 日期；CSV 最多导出 10,000 条并防公式注入。
 
 [客户端示例](docs/CLIENTS.md) · [错误码](docs/ERROR_CODES.md) · [升级、迁移与回退](docs/SELF_HOSTING.md) · [更新日志](CHANGELOG.md) · [路线图](ROADMAP.md)
 

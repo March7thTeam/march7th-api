@@ -42,6 +42,10 @@ def footer_links() -> tuple:
     return tuple(result)
 
 
+def upstream_base_url() -> str:
+    return public_url(env("UPSTREAM_BASE_URL", env("CODEXPROXY_BASE_URL", "http://localhost:8317")), "UPSTREAM_BASE_URL")
+
+
 def upstream_api_key() -> str:
     # Presence of the canonical variable takes precedence, including an empty value.
     return env("UPSTREAM_API_KEY", env("CODEXPROXY_API_KEY", ""))
@@ -60,7 +64,7 @@ class Settings:
     session_secret: str = env("SESSION_SECRET", "")
     astrbot_base_url: str = env("ASTRBOT_BASE_URL", "")
     luomocore_base_url: str = env("LUOMOCORE_BASE_URL", "")
-    codexproxy_base_url: str = public_url(env("UPSTREAM_BASE_URL", env("CODEXPROXY_BASE_URL", "http://localhost:8317")), "UPSTREAM_BASE_URL")
+    codexproxy_base_url: str = upstream_base_url()
     operator_name: str = env("OPERATOR_NAME", "Self-hosted operator")
     operator_url: str = public_url(env("OPERATOR_URL", ""), "OPERATOR_URL", optional=True)
     public_description: str = env("PUBLIC_DESCRIPTION", "自托管模型换乘枢纽：统一入口、密钥权限与透明积分账本。")

@@ -32,6 +32,8 @@
   let controller;
   let models = [];
   let history = [];
+  let turnReceipts = [];
+  let lastSubmitted = null;
   const endpoint = () => form.querySelector('input[name="play-endpoint"]:checked').value;
   const setStatus = text => { $('play-status').textContent = text; };
   const apiError = async response => {
@@ -95,10 +97,39 @@
   }
   function curlExample() {
     const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-    $('play-curl').textContent = `curl ${quote(form.dataset.apiBase + (endpoint() === 'responses' ? '/responses' : '/chat/completions'))} \\\n  -H 'Authorization: Bearer YOUR_API_KEY' \\\n  -H 'Content-Type: application/json' \\\n  -d ${quote(JSON.stringify(buildPayload($('play-stream').checked), null, 2))}`;
+    // Empty composer retains the exact last submitted request, including its
+    // protocol/parameters. Typing the next turn switches back to draft preview.
+    const submitted = !$('play-prompt').value && lastSubmitted;
+    const kind = submitted ? submitted.kind : endpoint();
+    const payload = submitted ? submitted.payload : buildPayload($('play-stream').checked);
+    $('play-curl').textContent = `curl ${quote(form.dataset.apiBase + (kind === 'responses' ? '/responses' : '/chat/completions'))} \\\n  -H 'Authorization: Bearer YOUR_API_KEY' \\\n  -H 'Content-Type: application/json' \\\n  -d ${quote(JSON.stringify(payload, null, 2))}`;
+  }
+  const billingLabel = status => ({settled:'已结算', released:'已释放', held:'已冻结', reserved:'已冻结',
+    reconciliation_required:'待人工核账', admin_exempt:'管理员免计费', legacy_unbilled:'历史未计费',
+    unbilled:'未计费', not_billable:'无需计费'}[status] || '待确认');
+  function renderTranscript() {
+    const node = $('play-history');
+    node.replaceChildren();
+    for (let index = 0; index < history.length; index += 2) {
+      const turn = document.createElement('article'); turn.className = 'play-turn';
+      for (const message of history.slice(index, index + 2)) {
+        const line = document.createElement('p');
+        line.textContent = `${message.role === 'user' ? '你' : '助手'}：${typeof message.content === 'string' ? message.content : '[图片与文本]'}`;
+        turn.append(line);
+      }
+      const receipt = turnReceipts[index / 2];
+      if (receipt) {
+        const link = document.createElement('a'); link.href = '/developer/usage/requests/' + receipt.id;
+        link.textContent = `${billingLabel(receipt.billing_status)} · 本轮扣费 ${receipt.charged_credits} 积分 · 请求 ${receipt.request_id}`;
+        turn.append(link);
+      }
+      node.append(turn);
+    }
+    node.hidden = history.length === 0;
   }
   function newConversation() {
-    history = []; $('play-history').textContent = ''; $('play-history').hidden = true;
+    history = []; turnReceipts = []; lastSubmitted = null;
+    $('play-history').replaceChildren(); $('play-history').hidden = true;
     curlExample();
   }
   async function showReceipt(requestId) {
@@ -106,15 +137,16 @@
     try {
       let data;
       for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await fetch('/api/developer/requests/' + encodeURIComponent(requestId), {credentials:'same-origin', cache:'no-store'});
+        const response = await fetch('/api/developer/requests?' + new URLSearchParams({request_id: requestId}), {credentials:'same-origin', cache:'no-store'});
         if (!response.ok) throw new Error('回执暂不可用');
         data = await response.json();
         if (data.billing_status !== 'held') break;
         await new Promise(resolve => setTimeout(resolve, 200));
       }
       const node = $('play-cost');
-      node.textContent = `本次：${data.billing_status} · 冻结 ${data.reserved_credits} · 扣费 ${data.charged_credits} · 解除冻结 ${data.released_credits} 积分 `;
+      node.textContent = `本次：${billingLabel(data.billing_status)} · 冻结 ${data.reserved_credits} · 扣费 ${data.charged_credits} · 解除冻结 ${data.released_credits} 积分 `;
       const link = document.createElement('a'); link.href = '/developer/usage/requests/' + data.id; link.textContent = '查看完整回执 →'; node.append(link);
+      return data;
     } catch (_) { $('play-cost').textContent = '费用回执暂不可用，请在调用记录中按请求 ID 核对。'; }
   }
   form.addEventListener('input', curlExample);
@@ -141,7 +173,7 @@
   $('play-prompt').addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); } });
   $('play-stop').addEventListener('click', () => controller?.abort());
   $('play-clear').addEventListener('click', () => {
-    controller?.abort(); newConversation(); $('play-prompt').value = ''; $('prompt-count').textContent = '0 / 8000';
+    controller?.abort(); $('play-prompt').value = ''; newConversation(); $('prompt-count').textContent = '0 / 8000';
     $('play-output').textContent = ''; $('play-echo').hidden = true; $('play-meta').textContent = '—'; setStatus('已清空');
     $('play-prompt').focus();
   });
@@ -155,12 +187,15 @@
     const start = performance.now();
     const kind = endpoint();
     const streamed = $('play-stream').checked;
+    renderTranscript();
     $('play-send').disabled = true; $('play-stop').disabled = false;
     $('play-output').textContent = ''; $('play-meta').textContent = '…';
     $('play-echo').textContent = $('play-prompt').value; $('play-echo').hidden = false;
     setStatus('正在连接…');
-    let usage, requestId = '', output = '', firstByte;
+    let usage, requestId = '', output = '', firstByte, completed = false;
     const payload = buildPayload(streamed);
+    lastSubmitted = {kind, payload: JSON.parse(JSON.stringify(payload))};
+    curlExample();
     form.querySelectorAll('input,textarea,select').forEach(node => { node.disabled = true; });
     $('play-clear').disabled = true;
     $('play-cost').textContent = '本次费用核对中…';
@@ -207,8 +242,7 @@
       }
       const userTurn = kind === 'responses' ? payload.input.at(-1) : payload.messages.at(-1);
       history.push(userTurn, {role:'assistant',content:output});
-      $('play-history').textContent = history.map(turn => `${turn.role === 'user' ? '你' : '助手'}：${typeof turn.content === 'string' ? turn.content : '[图片与文本]'}`).join('\n\n');
-      $('play-history').hidden = false;
+      completed = true;
       $('play-prompt').value = ''; $('prompt-count').textContent = '0 / 8000';
       setStatus('完成');
     } catch (error) {
@@ -222,7 +256,8 @@
       parts.push(`token ${Number.isFinite(tokens) ? tokens : '未回报'}`);
       parts.push(`请求 ID ${requestId || '未建立'}`);
       $('play-meta').textContent = parts.join(' · ');
-      await showReceipt(requestId);
+      const confirmedReceipt = await showReceipt(requestId);
+      if (completed) turnReceipts.push(confirmedReceipt || null);
       controller = null;
       form.querySelectorAll('input,textarea,select').forEach(node => { node.disabled = false; });
       $('play-send').disabled = false; $('play-stop').disabled = true; $('play-clear').disabled = false;

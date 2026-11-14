@@ -52,16 +52,16 @@ def amount_to_units(value: str | Decimal | int, currency: str = "credits") -> in
         value = value.strip()
         if len(value) > 40 or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
             raise CreditError("invalid_amount", "请输入非负十进制金额，不支持科学计数法。")
-    if currency.lower() == 'usd':
-        from app.price_store import conversion
-        multiplier = Decimal(conversion()['base_credits_per_usd']) * UNITS_PER_CREDIT
-    else:
-        multiplier = {"credits": UNITS_PER_CREDIT, "cny": CREDITS_PER_CNY * UNITS_PER_CREDIT}.get(currency.lower())
-    if multiplier is None:
-        raise CreditError("invalid_currency", "不支持的金额单位。")
     try:
         with localcontext() as context:
             context.prec = 80
+            if currency.lower() == 'usd':
+                from app.price_store import conversion
+                multiplier = Decimal(conversion()['base_credits_per_usd']) * UNITS_PER_CREDIT
+            else:
+                multiplier = {"credits": UNITS_PER_CREDIT, "cny": CREDITS_PER_CNY * UNITS_PER_CREDIT}.get(currency.lower())
+            if multiplier is None:
+                raise CreditError("invalid_currency", "不支持的金额单位。")
             amount = Decimal(value)
             if not amount.is_finite() or amount < 0 or amount > Decimal(MAX_UNITS) / multiplier:
                 raise CreditError("invalid_amount", "金额超出允许范围。")

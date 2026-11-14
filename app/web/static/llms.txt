@@ -9,7 +9,7 @@ Self-hosted OpenAI-compatible gateway with account-scoped API keys and integer c
 - API base: /v1
 - Supported generation: POST /v1/chat/completions, POST /v1/responses; optional POST /v1/images/generations
 - Authentication: Authorization: Bearer YOUR_API_KEY
-- Session-only receipt: /api/developer/requests/{X-Request-ID}
+- Session-only receipt: /api/developer/requests?request_id={URL-encoded X-Request-ID}
 
 Missing or contradictory authoritative usage stays pending for manual reconciliation. Do not infer charges from output length.
 OpenAPI auto-discovery is disabled. No embeddings or Anthropic Messages endpoint is implemented.

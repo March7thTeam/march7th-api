@@ -19,4 +19,4 @@
 
 费用状态：`held` 为冻结中；`settled` 为已扣实际费用；`released` 为解冻；`reconciliation_required` 为人工核账；`admin_exempt` 是明确授权的管理员免计费。未知用量、矛盾回执、图片预算超限或密钥结算上限不足都不会按猜测金额自动扣费。
 
-会话回执：`GET /api/developer/requests/{request_id}` 默认返回当前用户最新同 ID 记录；附 `usage_id` 可精确匹配。页面链接使用内部记录编号。普通用户只能看自己的记录，管理员可看全站，不返回提示词、回答、密钥或上游凭据。
+会话回执：`GET /api/developer/requests?request_id=...`（1–128 个可打印字符，需 URL 编码；旧路径保持兼容） 默认返回当前用户最新同 ID 记录；附 `usage_id` 可精确匹配。页面链接使用内部记录编号。普通用户只能看自己的记录，管理员可看全站，不返回提示词、回答、密钥或上游凭据。

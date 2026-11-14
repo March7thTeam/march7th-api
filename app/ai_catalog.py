@@ -10,7 +10,7 @@ import json
 import httpx
 from starlette.concurrency import run_in_threadpool
 
-from app.config import settings, upstream_api_key
+from app.config import settings, upstream_api_key, upstream_base_url
 from app.credit_pricing import priced_models
 from app.image_generation import image_generation_available, image_models
 from app.image_input import supports_vision
@@ -91,7 +91,7 @@ async def snapshot():
             start = time.monotonic()
             try:
                 async with httpx.AsyncClient(timeout=6, follow_redirects=False, trust_env=False) as client:
-                    response = await client.get(settings.codexproxy_base_url.rstrip("/") + "/v1/models", headers={"Authorization": "Bearer " + secret})
+                    response = await client.get(upstream_base_url() + "/v1/models", headers={"Authorization": "Bearer " + secret})
                 latency = round((time.monotonic() - start) * 1000)
                 data = response.json() if response.status_code == 200 else {}
                 upstream_ok = isinstance(data.get("data"), list)
