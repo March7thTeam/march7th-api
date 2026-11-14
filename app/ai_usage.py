@@ -25,6 +25,7 @@ from app.admin_key_policy import ADMIN_EXEMPT_REASON, AdminKeyPolicyError, admin
 from app.credit_ledger import (CreditError, mark_credit_dispatched, recover_stale_usage,
                                release_reserved_credit, reserve_credit, settle_credit)
 from app.dispatch_recovery import enqueue_usage
+from app.key_budget import key_budget_exceeded
 from app.credit_pricing import BillingQuote, PricingError, billing_details, billing_receipt_present, calculate_charge
 
 
@@ -137,22 +138,9 @@ def model_allowed(conn: sqlite3.Connection, key_row: Any, model_id: str) -> bool
 
     if not isinstance(model_id, str) or not model_id:
         return False
-    policy = str(_row_value(key_row, "model_policy", "all") or "all").strip().lower()
-    if policy == "all":
-        return True
-    if policy not in {"allowlist", "exact", "restricted"}:
-        return False
-    key_id = _row_value(key_row, "id")
-    if key_id is None:
-        return False
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM api_key_models WHERE api_key_id=? AND model_id=? LIMIT 1",
-            (int(key_id), model_id),
-        ).fetchone()
-    except (sqlite3.DatabaseError, TypeError, ValueError):
-        return False
-    return row is not None
+    from app.key_settings import effective_model_ids
+    allowed = effective_model_ids(conn, key_row)
+    return allowed is None or model_id in allowed
 
 
 def _quota_limits(key_row: Any) -> tuple[int | None, int | None, int | None]:
@@ -171,15 +159,17 @@ def _quota_limits(key_row: Any) -> tuple[int | None, int | None, int | None]:
 
     # None means no configured limit.  Existing schema defaults are supplied
     # by SQLite and therefore arrive here as integers for normal keys.
-    return value("rate_limit_per_minute"), value("daily_quota"), value("monthly_quota")
+    rates = [v for v in (value("rate_limit_per_minute"), value("owner_rpm")) if v is not None]
+    return min(rates) if rates else None, value("daily_quota"), value("monthly_quota")
 
 
 def _key_expired(key_row: Any, now: datetime) -> bool:
-    raw_expires_at = _row_value(key_row, "expires_at")
-    expires_at = _parse_datetime(raw_expires_at)
-    if raw_expires_at and expires_at is None:
-        return True
-    return expires_at is not None and expires_at <= now
+    for field in ('expires_at', 'owner_expires_at'):
+        raw = _row_value(key_row, field)
+        expiry = _parse_datetime(raw)
+        if raw and (expiry is None or expiry <= now):
+            return True
+    return False
 
 
 def _usage_count(conn: sqlite3.Connection, key_id: int, since: datetime) -> int:
@@ -347,9 +337,17 @@ def reserve_usage(
         if protocol in GENERATION_PROTOCOLS and billing_quote is None and not exempt:
             conn.rollback()
             return None, QuotaRejection("billing_quote_missing", "A credit reservation is required for generation.", 503)
+        # The owner's optional per-key cap is checked under the same write lock
+        # as the reservation, against this key's settled and still-frozen spend.
+        if billing_quote is not None and not exempt and key_budget_exceeded(conn, current, billing_quote.amount_units):
+            conn.rollback()
+            return None, QuotaRejection("key_credit_limit_exceeded",
+                "This API key has reached its credit limit. Raise the limit or use another key.", 402)
         current_model_ids: tuple[str, ...] | None = None
-        if str(current["model_policy"] or "all").strip().lower() != "all" and protocol == "models":
-            current_model_ids = tuple(get_key_models(conn, int(key_id)))
+        if protocol == 'models':
+            from app.key_settings import effective_model_ids
+            allowed = effective_model_ids(conn, current)
+            current_model_ids = tuple(sorted(allowed)) if allowed is not None else None
         cursor = conn.execute(
             """
             INSERT INTO api_usage_logs(

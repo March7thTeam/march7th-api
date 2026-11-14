@@ -48,7 +48,7 @@
 
 client = OpenAI(
     base_url=<span class="s">"{{ app_base_url }}/v1"</span>,
-    api_key=os.environ[<span class="s">"LUOMO_API_KEY"</span>],
+    api_key=os.environ[<span class="s">"MARCH7TH_API_KEY"</span>],
 )
 reply = client.chat.completions.create(
     model=<span class="s">"{{ model }}"</span>,
@@ -60,7 +60,7 @@ print(reply.choices[0].message.content)</pre>
 
 <span class="k">const</span> client = <span class="k">new</span> OpenAI({
   baseURL: <span class="s">'{{ app_base_url }}/v1'</span>,
-  apiKey: process.env.LUOMO_API_KEY,
+  apiKey: process.env.MARCH7TH_API_KEY,
 });
 <span class="k">const</span> reply = <span class="k">await</span> client.chat.completions.create({
   model: <span class="s">'{{ model }}'</span>,
@@ -68,7 +68,7 @@ print(reply.choices[0].message.content)</pre>
 });
 console.log(reply.choices[0].message.content);</pre>
 <pre data-panel="curl" id="{{ id }}-curl" hidden><span class="k">curl</span> {{ app_base_url }}/v1/chat/completions \
-  -H <span class="s">"Authorization: Bearer $LUOMO_API_KEY"</span> \
+  -H <span class="s">"Authorization: Bearer $MARCH7TH_API_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
   -d <span class="s">'{"model": "{{ model }}", "messages": [{"role": "user", "content": "你好"}]}'</span></pre>
   <div class="screen-foot"><span>OpenAI 兼容 · Chat Completions</span><span>密钥放在服务端环境变量</span></div>

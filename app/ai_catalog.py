@@ -10,7 +10,7 @@ import json
 import httpx
 from starlette.concurrency import run_in_threadpool
 
-from app.config import settings
+from app.config import settings, upstream_api_key, upstream_base_url
 from app.credit_pricing import priced_models
 from app.image_generation import image_generation_available, image_models
 from app.image_input import supports_vision
@@ -86,12 +86,12 @@ async def snapshot():
             db_ok = False
         models, upstream_ok, latency = [], False, None
         reason = "未配置上游凭据"
-        secret = os.getenv("CODEXPROXY_API_KEY", "")
+        secret = upstream_api_key()
         if secret:
             start = time.monotonic()
             try:
                 async with httpx.AsyncClient(timeout=6, follow_redirects=False, trust_env=False) as client:
-                    response = await client.get(settings.codexproxy_base_url.rstrip("/") + "/v1/models", headers={"Authorization": "Bearer " + secret})
+                    response = await client.get(upstream_base_url() + "/v1/models", headers={"Authorization": "Bearer " + secret})
                 latency = round((time.monotonic() - start) * 1000)
                 data = response.json() if response.status_code == 200 else {}
                 upstream_ok = isinstance(data.get("data"), list)
@@ -102,7 +102,7 @@ async def snapshot():
                 reason = "上游探测超时或响应异常"
         verification = {}
         try:
-            verification = json.loads(Path(__file__).with_name("ai_verification.json").read_text(encoding="utf-8"))
+            verification = json.loads(Path(os.environ["MODEL_VERIFICATION_PATH"]).read_text(encoding="utf-8")) if os.getenv("MODEL_VERIFICATION_PATH") else {}
         except (OSError, ValueError):
             pass
         entries = []
@@ -127,7 +127,7 @@ async def snapshot():
                 category = "图像模型"
                 use = "文生图：每次一张 PNG；使用 Images API，按文本输入与图像/文本输出分别计费。" if image_generation else "当前网关未开放此图像模型的生成接口，不能直接用于文本示例。"
             elif not billable:
-                use = "上游列出的模型，但没有官方标准文本价格；个人密钥暂不能调用。"
+                use = "上游列出的模型，但没有当前文本计价；个人密钥暂不能调用。"
             text_candidate = billable and not model_id.startswith("gpt-image-")
             checked = public_verification(verification, model_id)
             entries.append({"id": model_id, "name": name, "category": category, "use": use, "billable": billable,
@@ -138,7 +138,7 @@ async def snapshot():
                             "kind": "image_generation" if model_id in image_priced else "text",
                             "vision": supports_vision(model_id), "line": line_for(model_id), "state": board_state(model_id, text_candidate or image_generation),
                             "verification": checked, "note": verification_note(checked, text_candidate or image_generation)})
-        _cache = {"service": "LuomoAPI Hub", "version": "2026.10-interchange-t001", "status": "operational" if db_ok and upstream_ok else "degraded", "updated_at": checked_at, "cache_seconds": 30,
+        _cache = {"service": settings.app_name, "version": "2026.10-interchange-t001", "status": "operational" if db_ok and upstream_ok else "degraded", "updated_at": checked_at, "cache_seconds": 30,
                   "components": [{"name": "网关应用", "status": "operational", "detail": "当前 HTTP 请求已到达应用"}, {"name": "数据库", "status": "operational" if db_ok else "degraded", "detail": "只读查询成功" if db_ok else "查询失败"}, {"name": "AI 上游目录", "status": "operational" if upstream_ok else "degraded", "detail": reason, "latency_ms": latency}],
                   "models": entries, "native_responses_configured": native_available, "image_generation_enabled": images_available, "model_count": len(models), "default_model": default_model(entries), "billable_count": sum(1 for entry in entries if entry["billable"]), "note": "目录可达不代表生成成功；探测不发起付费生成。模型权限以你的密钥为准。"}
         _expires = time.monotonic() + 30

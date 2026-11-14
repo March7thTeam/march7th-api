@@ -6,10 +6,11 @@
   <span class="stub" aria-hidden="true"></span>
   <div class="name"><strong>{{ item.name }}</strong><code>{{ item.key_prefix }}…</code></div>
   <div class="meta"><b>{% if item.model_policy == 'all' %}全部模型{% elif item.models %}{{ item.models|length }} 个模型{% else %}无模型权限{% endif %}</b>{{ item.rate_limit_per_minute or '不限' }} 次/分{% if item.daily_quota %} · {{ item.daily_quota }}/日{% endif %}{% if item.monthly_quota %} · {{ item.monthly_quota }}/月{% endif %}</div>
-  <div class="meta"><b>{{ item.last_used_at|utc if item.last_used_at else '从未使用' }}</b>{{ '到期 ' ~ (item.expires_at|utc) if item.expires_at else '不过期' }}</div>
+  <div class="meta"><b>{{ item.last_used_at|utc if item.last_used_at else '从未使用' }}</b>{{ '到期 ' ~ (item.effective_expires_at|utc) if item.effective_expires_at else '不过期' }}{% if item.budget %} · 已用 {{ item.budget.committed_credits|credit }}/{{ item.budget.limit_credits|credit }} 积分{% endif %}</div>
   <div class="cell-actions">
     {% if active %}
     <a class="btn sm ghost" href="/developer/playground?key={{ item.id }}">试用</a>
+    <a class="btn sm ghost" href="/developer/keys/{{ item.id }}/limits">限额</a>
     <form method="post" action="/developer/keys/{{ item.id }}/revoke" class="inline-form" data-confirm="撤销后，使用「{{ item.name }}」的应用会立即失效，且无法恢复。确定撤销吗？"><button class="btn danger sm" type="submit">撤销</button></form>
     {% else %}<span class="badge {{ item.status|tone }}">{{ item.status|label }}</span>{% endif %}
   </div>
@@ -30,11 +31,17 @@
     <input type="hidden" name="requested_scopes" value="models:read,chat:completions,responses:create,images:generate">
     <label class="field grow">名称<input name="name" type="text" placeholder="例如：AIRI 桌面伴侣、博客摘要脚本" maxlength="100" required autocomplete="off"></label>
     <label class="field grow">用途（可选）<input name="requested_reason" type="text" placeholder="例如：日常聊天" maxlength="2000" autocomplete="off"></label>
+    <details class="more"><summary>初始限额（可选）</summary><div class="form two">
+      <label class="field">总积分上限<input name="credit_limit" inputmode="decimal" placeholder="留空不设自助上限"></label>
+      <label class="field">到期日期（UTC）<input name="expires_on" type="date"></label>
+      <label class="field">每分钟请求数<input name="rate_limit_per_minute" type="number" min="1" max="60" value="60"></label>
+      <label class="field">模型子集<input name="models" placeholder="模型 ID，以逗号分隔；留空全部已计价模型"></label>
+    </div></details>
     <button class="btn primary" type="submit" data-busy="签发中…">签发 <span class="arrow" aria-hidden="true">→</span></button>
   </form>
 </section>
 
-<div class="block-title section-gap"><h2>有效密钥 <span class="muted">{{ active_keys|length }}</span></h2><span class="muted small">时间为 UTC · 最多保留 20 把</span></div>
+<div class="block-title section-gap"><h2>有效密钥 <span class="muted">{{ active_keys|length }}</span></h2><span class="muted small">本地时间（悬停查看 UTC）· 最多保留 20 把</span></div>
 {% if active_keys %}
 <div class="card flush"><ul class="key-list">{% for item in active_keys %}{{ key_row(item) }}{% endfor %}</ul></div>
 {% else %}
@@ -52,7 +59,7 @@
 <details class="more">
   <summary>签发记录（{{ requests|length }}）</summary>
   <div class="table-wrap"><table>
-    <thead><tr><th>名称</th><th>权限范围</th><th>状态</th><th>说明</th><th>时间（UTC）</th></tr></thead>
+    <thead><tr><th>名称</th><th>权限范围</th><th>状态</th><th>说明</th><th>本地时间</th></tr></thead>
     <tbody>{% for req in requests %}<tr><td>{{ req.name }}</td><td><code>{{ req.requested_scopes or '—' }}</code></td><td><span class="badge {{ {'approved':'ok','pending':'warn'}.get(req.status, 'off') }}">{{ {'approved':'已签发','pending':'待审核','rejected':'已拒绝'}.get(req.status, req.status) }}</span></td><td>{{ req.admin_note or req.requested_reason or '—' }}</td><td class="num">{{ req.created_at|utc }}</td></tr>{% endfor %}</tbody>
   </table></div>
 </details>

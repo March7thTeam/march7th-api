@@ -9,17 +9,17 @@
     <a href="#quickstart">快速开始</a><a href="#authentication">认证与密钥</a>
     <p>AI 接口</p>
     <a href="#ai">OpenAI 兼容接口</a><a href="#images">图像输入</a><a href="#image-generation">图像生成</a><a href="#billing">积分与计费</a><a href="#errors">错误码</a>
-    <p>业务接口</p>
+    {% if api_catalog_enabled %}<p>业务接口</p>
     <a href="#endpoints">接口目录</a>
     <div class="route-links">{% for route in routes %}<a href="#endpoint-{{ route.id }}">{{ route.name }}</a>{% endfor %}</div>
-    <p>账户</p>
+    {% endif %}<p>账户</p>
     <a href="#account">登录与账户安全</a><a href="/developer/keys">管理 API 密钥 ↗</a><a href="/pricing">价格表 ↗</a>
   </nav>
 
   <article class="docs-body">
     <p class="eyebrow">Reference · 接口文档</p>
     <h1>接入指南</h1>
-    <p class="lead docs-lead">AI 模型走 OpenAI 兼容地址 <code>{{ app_base_url }}/v1</code>；洛墨站其他业务服务统一经过 <code>/api/public/v1/{route}</code>。</p>
+    <p class="lead docs-lead">AI 模型走 OpenAI 兼容地址 <code>{{ app_base_url }}/v1</code>。{% if api_catalog_enabled %}可选业务服务通过 <code>/api/public/v1/{route}</code> 按权限接入。{% endif %}</p>
 
     <section id="quickstart">
       <h2>快速开始</h2>
@@ -80,26 +80,26 @@
       <p>JSON 必须显式指定 model 和非空 prompt（最多 32,000 字符）。quality 支持 low / medium / high，省略或 auto 均采用 medium；size 支持 1024x1024 / 1024x1536 / 1536x1024，省略或 auto 均采用 1024x1024。n 仅支持整数 1，输出格式仅 PNG。返回 <code>data[0].b64_json</code>、分模态 <code>usage</code> 与响应头 <code>X-Request-ID</code>。</p>
       <p>不支持编辑、批量、透明背景、stream、tools、partial_images、response_format 或其他额外参数；额外字段返回 400。遇到待核请保留请求 ID，重试会产生一次新调用。</p>
       <div class="screen"><div class="screen-bar"><span class="title">cURL · Images API</span></div><pre>curl {{ app_base_url }}/v1/images/generations \
-  -H "Authorization: Bearer $LUOMO_API_KEY" \
+  -H "Authorization: Bearer $MARCH7TH_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"model":"gpt-image-2","prompt":"一列穿过星空的列车","quality":"low","size":"1024x1024","n":1}'</pre></div>
       <div class="screen section-gap"><div class="screen-bar"><span class="title">Python · OpenAI SDK</span></div><pre>import base64
 import os
 from openai import OpenAI
 
-client = OpenAI(base_url="{{ app_base_url }}/v1", api_key=os.environ["LUOMO_API_KEY"])
+client = OpenAI(base_url="{{ app_base_url }}/v1", api_key=os.environ["MARCH7TH_API_KEY"])
 result = client.images.generate(
     model="gpt-image-2", prompt="一列穿过星空的列车",
     quality="low", size="1024x1024", n=1, output_format="png",
 )
 with open("generated.png", "wb") as image:
     image.write(base64.b64decode(result.data[0].b64_json))</pre></div>
-      <p class="muted small">先按输入与输出上界冻结预算，随后按官方 Standard 分模态价格与实际用量结算。取消或超时后可能已在生成，缺失/矛盾用量或超出预算会保留本笔冻结并进入待核，不根据图片大小猜费用。有效图片与可计价回执超预算时仍可下载，响应头 <code>X-Credit-Status: reconciliation_required</code> 表示保留真实费用待核；已知费用超出冻结总额后，后续生成返回 409。详见<a href="/pricing#image-pricing">图像价格</a>。</p>
+      <p class="muted small">先按输入与输出上界冻结预算，随后按价格快照的分模态费率与实际用量结算。取消或超时后可能已在生成，缺失/矛盾用量或超出预算会保留本笔冻结并进入待核，不根据图片大小猜费用。有效图片与可计价回执超预算时仍可下载，响应头 <code>X-Credit-Status: reconciliation_required</code> 表示保留真实费用待核；已知费用超出冻结总额后，后续生成返回 409。详见<a href="/pricing#image-pricing">图像价格</a>。</p>
     </section>
 
     <section id="billing">
       <h2>积分与计费</h2>
-      <p>生成调用按 OpenAI 官方 Standard 单价结算：<strong>¥1 = 100 积分</strong>，<strong>$1 = 720 积分</strong>，精确到六位小数。</p>
+      <p>生成调用按当前价格发行版本与倍率结算：<strong>¥1 = 100 积分</strong>，<strong>$1 = {{ conversion.credits_per_usd }} 积分</strong>，精确到六位小数。</p>
       <ul>
         <li>每次生成先按输入估算和输出上限冻结预算，完成后按上游回报的真实 token 结算，多退少补。</li>
         <li>缓存命中与长上下文使用对应价格档位；读取模型目录不收费。</li>
@@ -138,7 +138,7 @@ with open("generated.png", "wb") as image:
       </ul>
     </section>
 
-    <section id="endpoints" aria-label="业务接口目录">
+    {% if api_catalog_enabled %}<section id="endpoints" aria-label="业务接口目录">
       <h2>业务接口</h2>
       <p>业务服务统一经过 <code>/api/public/v1/{route}</code>，按 scope 授权。</p>
       <div class="docs-tools">
@@ -159,7 +159,7 @@ with open("generated.png", "wb") as image:
             <div class="screen-bar"><span class="title">REQUEST</span><button class="copy" type="button" data-copy-target="request-{{ route.id }}" aria-label="复制 {{ route.name }} 请求示例">复制</button></div>
 <pre id="request-{{ route.id }}">curl --request {{ route.target_method }} \
   '{{ app_base_url }}/api/public/v1/{{ route.public_path }}'{% if not route.allow_anonymous %} \
-  --header "Authorization: Bearer $LUOMO_API_KEY"{% endif %}{% if route.target_method in ['POST', 'PUT', 'PATCH'] %} \
+  --header "Authorization: Bearer $MARCH7TH_API_KEY"{% endif %}{% if route.target_method in ['POST', 'PUT', 'PATCH'] %} \
   --header 'Content-Type: application/json' \
   --data '{}'{% endif %}</pre>
           </div>
@@ -168,7 +168,7 @@ with open("generated.png", "wb") as image:
         {% endfor %}
         <div class="empty-state" id="route-empty" {% if routes %}hidden{% endif %}><strong>没有找到匹配的接口</strong>试试其他关键词，或切换到“全部”。</div>
       </div>
-    </section>
+    </section>{% endif %}
   </article>
 </div>
 {% endblock %}

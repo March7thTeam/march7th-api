@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#eeede7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#090d17" media="(prefers-color-scheme: dark)">
-  <meta name="description" content="{% block description %}{{ app_name }} 换乘枢纽：一个 OpenAI 兼容地址接入多条模型线路，注册即领密钥，按官方标准价以积分结算。{% endblock %}">
+  <meta name="description" content="{% block description %}{{ public_description }}{% endblock %}">
   <title>{% block title %}{{ app_name }} · 换乘枢纽{% endblock %}</title>
   {% if request.url.path in ['/', '/docs', '/models', '/pricing', '/status'] %}
   <link rel="canonical" href="{{ app_base_url }}{{ request.url.path }}">
@@ -48,7 +48,7 @@
         {{ station('/admin', '管理概览') }}{{ station('/admin/users', '用户') }}{{ station('/admin/api-keys', '全部密钥') }}{{ station('/admin/key-requests', '密钥申请') }}{{ station('/admin/credits', '积分运营') }}{{ station('/admin/ai-usage', '全站用量') }}
       </ul></div>
       <div class="line-group"><p>管理 · 网关</p><ul>
-        {{ station('/admin/routes', '公开路由') }}{{ station('/apis', '上游 API') }}{{ station('/tester', '接口测试') }}{{ station('/admin/logs', '网关调用') }}{{ station('/logs', '测试日志') }}{{ station('/secrets', '凭据状态') }}{{ station('/settings', '系统设置') }}
+        {% if api_catalog_enabled %}{{ station('/admin/routes', '公开路由') }}{{ station('/apis', '上游 API') }}{{ station('/tester', '接口测试') }}{% endif %}{{ station('/admin/logs', '网关调用') }}{% if api_catalog_enabled %}{{ station('/logs', '测试日志') }}{% endif %}{{ station('/secrets', '凭据状态') }}{{ station('/settings', '系统设置') }}
       </ul></div>
       {% endif %}
       <div class="nav-account">
@@ -80,14 +80,8 @@
   <main id="main" tabindex="-1">{% block public %}<div class="wrap page">{% block page %}{% endblock %}</div>{% endblock %}</main>
   <footer class="footer">
     <div class="wrap">
-      <nav class="network" aria-label="洛墨站网络">
-        <a href="https://luomo.moe" title="洛墨站的主线，从这里出发"><i>NL</i>夜行线<small>luomo.moe</small></a>
-        <span aria-current="true" title="你在这里"><i>IX</i>换乘枢纽<small>{{ app_authority }} · 本站</small></span>
-        <a href="https://file.luomo.moe" title="文件靠岸、贴签、沿直链出航"><i>FH</i>文件星港<small>file.luomo.moe</small></a>
-        <a href="https://ops.luomo.moe/servers" title="四台服务器每分钟上报一次，本站主机也在其中"><i>OP</i>监控空间站<small>ops.luomo.moe</small></a>
-        <a href="https://misskey.march7th.cn" title="停下来聊聊的一站"><i>M7</i>三月第七站<small>march7th.cn</small></a>
-      </nav>
-      <div class="footer-meta"><a href="/docs">接口文档</a><a href="/pricing">价格</a><a href="/status">服务状态</a><a href="/security">安全政策</a><span class="push">© 2026 Luomo · 洛墨站</span></div>
+      {% if footer_links %}<nav class="network" aria-label="相关链接">{% for link in footer_links %}<a href="{{ link.url }}" rel="noopener noreferrer">{{ link.label }}</a>{% endfor %}</nav>{% endif %}
+      <div class="footer-meta"><a href="/docs">接口文档</a><a href="/pricing">价格</a><a href="/status">服务状态</a><a href="/security">安全政策</a><span class="push">{% if operator_url %}<a href="{{ operator_url }}" rel="noopener noreferrer">{{ operator_name }}</a>{% else %}{{ operator_name }}{% endif %}</span></div>
     </div>
   </footer>
   {% endif %}

@@ -62,6 +62,8 @@ def seed() -> None:
                 (now, legacy_secret["id"]),
             )
         for item in DEFAULT_APIS:
+            if not item["base_url"] or not settings.api_catalog_enabled:
+                continue
             seed_name = "api:" + item["slug"]
             if conn.execute("SELECT 1 FROM catalog_seed_state WHERE seed_name=?", (seed_name,)).fetchone():
                 continue
@@ -84,22 +86,23 @@ def seed() -> None:
                     "INSERT INTO secrets(name, key, value_encrypted, status, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)",
                     (name, key, status, now, now),
                 )
-        admin = conn.execute("SELECT id FROM users WHERE username = ?", ("luomo",)).fetchone()
+        admin = conn.execute("SELECT id,role FROM users WHERE username = ?", (settings.admin_username,)).fetchone()
         if not admin and settings.admin_password_hash:
             conn.execute(
                 """
                 INSERT INTO users(username, email, password_hash, role, status, usage_reason, email_verified, email_verified_at, created_at, updated_at)
                 VALUES (?, ?, ?, 'admin', 'active', 'Owner account', 1, ?, ?, ?)
                 """,
-                ("luomo", "luomo@luomo.moe", settings.admin_password_hash, now, now, now),
+                (settings.admin_username, settings.admin_email, settings.admin_password_hash, now, now, now),
             )
-        elif admin:
-            conn.execute(
-                "UPDATE users SET role='admin', status='active', email_verified=1, email_verified_at=COALESCE(email_verified_at, ?), updated_at=? WHERE username='luomo'",
-                (now, now),
-            )
+        elif admin and settings.admin_password_hash and admin['role'] != 'admin':
+            raise RuntimeError('ADMIN_USERNAME belongs to an existing non-admin account; choose a new username or use an explicit audited admin operation.')
+        # Existing users retain their role, status and verification state. A
+        # predictable bootstrap username must never promote a registered user.
         api_ids = {row["slug"]: row["id"] for row in conn.execute("SELECT id, slug FROM apis").fetchall()}
         for name, public_path, slug, method, target_path, scope in DEFAULT_PUBLIC_ROUTES:
+            if not settings.api_catalog_enabled:
+                continue
             api_id = api_ids.get(slug)
             if not api_id:
                 continue

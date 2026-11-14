@@ -1,26 +1,9 @@
 {% extends "base.html" %}
-{% from "_macros.html" import roundel %}
-{% block title %}网关记录 · {{ app_name }}{% endblock %}
 {% block content %}
-<div class="page-head">
-  <div><p class="eyebrow">Ride log · 网关记录</p><h1>网关记录</h1><p class="lead">你的密钥最近 100 次经过网关的请求，包括 AI 接口与业务接口。不保存请求正文。</p></div>
-  <div class="actions"><a class="btn" href="/developer/usage">AI 用量与扣费</a></div>
-</div>
-<div class="card flush"><div class="table-wrap"><table>
-  <thead><tr><th>时间（UTC）</th><th>模型 / 接口</th><th>状态</th><th class="right">耗时</th><th>结果</th><th>错误</th></tr></thead>
-  <tbody>
-  {% for log in logs %}
-  <tr>
-    <td class="num">{{ log.created_at|utc }}</td>
-    <td>{% if log.model %}<div class="cell-model">{{ roundel(log.model, 'sm') }}<code>{{ log.model }}</code></div>{% else %}<code>{{ log.public_path }}</code>{% endif %}</td>
-    <td class="num">{{ log.status_code or '—' }}</td>
-    <td class="num right">{{ log.response_time_ms if log.response_time_ms is not none else '—' }} ms</td>
-    <td><span class="badge {{ 'ok' if log.success else 'danger' }}">{{ '成功' if log.success else '失败' }}</span></td>
-    <td class="small">{{ log.error_summary or '—' }}</td>
-  </tr>
-  {% else %}
-  <tr><td colspan="6" class="empty">还没有网关记录。</td></tr>
-  {% endfor %}
-  </tbody>
-</table></div></div>
+<div class="page-head"><div><h1>调用记录</h1><p>点击请求 ID 查看本次冻结、扣费和价格快照。日期筛选按 UTC。</p></div><a class="btn" href="/developer/usage.csv?{{ request.query_params }}">导出 CSV</a></div>
+<form method="get" class="card form two">
+{% for name,label in [('request_id','请求 ID'),('model','模型'),('protocol','协议'),('billing','计费状态'),('key_id','密钥 ID'),('since','开始日期'),('until','结束日期')] %}<label class="field">{{ label }}<input name="{{ name }}" value="{{ request.query_params.get(name, '') }}" type="{{ 'date' if name in ['since','until'] else 'text' }}"></label>{% endfor %}<button type="submit" class="btn primary">筛选</button>
+</form>
+<div class="card flush section-gap"><div class="table-wrap"><table><thead><tr><th>本地时间</th><th>请求 ID</th><th>模型 / 协议</th><th>状态</th><th>计费</th></tr></thead><tbody>{% for log in logs %}<tr><td>{{ log.created_at|utc }}</td><td>{% if log.request_id %}<a class="mono" href="/developer/usage/requests/{{ log.id }}">{{ log.request_id }}</a>{% else %}#{{ log.id }}{% endif %}</td><td><code>{{ log.model or log.protocol }}</code></td><td>{{ log.status_code or '—' }} · {{ log.outcome|label if log.outcome else '—' }}</td><td>{{ log.credit_status|label if log.credit_status else '—' }}</td></tr>{% else %}<tr><td colspan="5">没有符合条件的记录。</td></tr>{% endfor %}</tbody></table></div></div>
+<p class="muted">页面最近 100 条；CSV 最多 10,000 条，按同一筛选范围导出。</p>
 {% endblock %}

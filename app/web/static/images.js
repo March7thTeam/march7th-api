@@ -19,8 +19,9 @@
     const promptBytes = new TextEncoder().encode($('image-prompt').value).length;
     const imageTokens = {low: 512, medium: 2048, high: 8192}[$('image-quality').value]
       * ($('image-size').value === '1024x1024' ? 1 : 1.5);
-    const credits = ((promptBytes + 4096) * 5 + imageTokens * (model === 'gpt-image-1.5' ? 32 : 30)
-      + (model === 'gpt-image-1.5' ? 4096 * 10 : 0)) * 720 / 1e6;
+    const card = JSON.parse(form.dataset.priceData).image.models[model];
+    const credits = card ? ((promptBytes + 4096) * Number(card.text_input) + imageTokens * Number(card.image_output)
+      + (card.text_output ? 4096 * Number(card.text_output) : 0)) * Number(form.dataset.creditsPerUsd) / 1e6 : 0;
     $('image-estimate').textContent = model ? `本次冻结预算约 ${credits.toFixed(6)} 积分；最终仅按实际用量收费。` : '选择可用模型后显示冻结预算。';
   }
   async function loadModels() {

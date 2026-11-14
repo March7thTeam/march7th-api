@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from app.config import upstream_api_key, upstream_base_url
 import anyio
 from fastapi import APIRouter, Depends, Request, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -31,6 +32,7 @@ from app.admin_key_policy import AdminKeyPolicyError, admin_unmetered
 from app.credit_pricing import (DEFAULT_OUTPUT_TOKENS, PricingError, billing_details, billing_receipt_present,
                                 checked_output_limit, output_limit_requested, prepare_billable_request)
 from app.credit_ledger import recover_stale_usage, wallet_snapshot
+from app.key_budget import key_budget
 from app.text_capabilities import NATIVE_RESPONSES_MODELS, automatic_output_tiers, native_responses_enabled
 from app.image_generation import (IMAGE_ENDPOINT, IMAGE_UPSTREAM_URL, image_generation_enabled,
                                   image_generation_available, prepare_image_request, valid_image_response)
@@ -168,11 +170,17 @@ def _explicit_generation_rejection(payload: Any, status_code: int, protocol: str
         code == "auth_unavailable" or (isinstance(message, str) and message.startswith("auth_unavailable:")))
 
 
-def _available_credit_units(user_id: int) -> int:
-    """Advisory read used only to size an unspecified output limit; the reservation re-checks atomically."""
+def _available_credit_units(user_id: int, key_row: Any = None) -> int:
+    """Advisory read used only to size an unspecified output limit; the reservation re-checks atomically.
+
+    A key with its own credit cap is sized against what that cap still allows,
+    so a small cap picks a smaller automatic tier instead of being rejected.
+    """
     with closing(connect()) as conn:
         recover_stale_usage(conn)
-        return int(wallet_snapshot(conn, int(user_id))["available_units"])
+        available = int(wallet_snapshot(conn, int(user_id))["available_units"])
+        budget = key_budget(conn, key_row) if key_row is not None else None
+        return available if budget is None else min(available, budget["remaining_units"])
 
 
 def _auto_output_limit(payload: dict, protocol: str, available_units: int) -> int:
@@ -237,8 +245,9 @@ def _load_authorization(raw_key: str | None, endpoint: str, *, user_id: int | No
         if not endpoint_is_authorized(key, endpoint):
             return None, None, (403, "API key is not authorized for this endpoint.", None)
         allowed_ids = None
-        if endpoint == "/v1/models" and str(key["model_policy"] or "all").strip().lower() != "all":
-            allowed_ids = set(get_key_models(conn, key["id"]))
+        if endpoint == '/v1/models':
+            from app.key_settings import effective_model_ids
+            allowed_ids = effective_model_ids(conn, key)
         return {**dict(key), "admin_unmetered": exempt}, allowed_ids, None
 
 
@@ -332,11 +341,11 @@ def parse_json_body(body: bytes) -> dict[str, Any]:
 
 
 def _upstream_base() -> str:
-    return os.getenv("CODEXPROXY_BASE_URL", "http://codex-proxy:8317").rstrip("/")
+    return upstream_base_url()
 
 
 def _upstream_key() -> str:
-    return os.getenv("CODEXPROXY_API_KEY", "")
+    return upstream_api_key()
 
 
 def _upstream_url(path: str) -> str:
@@ -701,7 +710,7 @@ async def execute_gateway(endpoint: str, request: Request, *, raw_key: str | Non
                     billing_protocol = ENDPOINT_PROTOCOLS[endpoint]
                     default_limit = DEFAULT_OUTPUT_TOKENS
                     if not output_limit_requested(payload, protocol=billing_protocol):
-                        available = await run_in_threadpool(_available_credit_units, key_row["user_id"])
+                        available = await run_in_threadpool(_available_credit_units, key_row["user_id"], key_row)
                         default_limit = _auto_output_limit(payload, billing_protocol, available)
                     payload, billing_quote = prepare_billable_request(payload, protocol=billing_protocol, default_output_tokens=default_limit)
                 else:

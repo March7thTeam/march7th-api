@@ -4,6 +4,7 @@ No URLs, edits, tools, streaming or arbitrary provider options pass this boundar
 The token ceilings are admission budgets, never substitutes for a usage receipt.
 """
 from __future__ import annotations
+from app.price_store import exact_context
 
 import base64
 import binascii
@@ -35,15 +36,21 @@ def image_generation_available() -> bool:
 
 
 def image_models() -> list[str]:
-    return sorted(IMAGE_PRICES["models"])
+    from app.price_store import current_release
+    return sorted(current_release()["image"]["models"])
 
 
+@exact_context
 def prepare_image_request(payload: dict) -> tuple[dict, BillingQuote]:
+    from app.price_store import current_release, conversion
+    release = current_release()
+    prices = release["image"]
+    factors = conversion(release)
     allowed = {"model", "prompt", "quality", "size", "n", "stream", "output_format"}
     if set(payload) - allowed:
         raise PricingError("image_parameter_unsupported", "Unsupported image parameter(s): " + ", ".join(sorted(set(payload) - allowed)) + ".")
     model = payload.get("model")
-    if not isinstance(model, str) or model not in IMAGE_PRICES["models"]:
+    if not isinstance(model, str) or model not in prices["models"]:
         raise PricingError("price_unavailable", "Choose gpt-image-2 or gpt-image-1.5 for image generation.")
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 32000:
@@ -63,16 +70,16 @@ def prepare_image_request(payload: dict) -> tuple[dict, BillingQuote]:
     if payload.get("output_format", "png") != "png":
         raise PricingError("image_format_unsupported", "Only PNG output is supported.")
     outgoing = {"model": model, "prompt": prompt, "quality": quality, "size": size, "n": 1, "output_format": "png"}
-    card = dict(IMAGE_PRICES["models"][model])
+    card = dict(prices["models"][model])
     input_bound = len(prompt.encode("utf-8")) + 4096
     # The two rectangular canvases contain 1.5 times the square pixel area.
     image_bound = IMAGE_OUTPUT_CEILINGS[quality] * (1 if size == "1024x1024" else 3) // (1 if size == "1024x1024" else 2)
     text_bound = IMAGE_TEXT_OUTPUT_CEILING if card["text_output"] is not None else 0
     weighted = (input_bound * Decimal(card["text_input"]) + image_bound * Decimal(card["image_output"])
                 + text_bound * Decimal(card["text_output"] or "0"))
-    units = int((weighted * CREDITS_PER_USD).to_integral_value(rounding=ROUND_CEILING))
-    snapshot = {"kind": "image_generation", "version": IMAGE_PRICES["version"], "source": IMAGE_PRICES["source"],
-                "model": model, "card": card, "credits_per_usd": CREDITS_PER_USD, "images": 1,
+    units = int((weighted * Decimal(factors["credits_per_usd"])).to_integral_value(rounding=ROUND_CEILING))
+    snapshot = {"kind": "image_generation", "version": prices["version"], "source": prices["source"],
+                "model": model, "card": card, **factors, "images": 1,
                 "input_bound": input_bound, "image_input_bound": 0, "image_output_bound": image_bound,
                 "text_output_bound": text_bound, "quality": quality, "size": size}
     return outgoing, BillingQuote(units, json.dumps(snapshot, separators=(",", ":")))
@@ -113,6 +120,7 @@ def image_billing_details(payload: Any) -> dict | None:
             "output_breakdown_reported": out is not None}
 
 
+@exact_context
 def image_charge(snap: dict, details: dict) -> int:
     if details.get("kind") != "image_generation" or details.get("model") not in {None, snap["model"]}:
         raise PricingError("usage_model_mismatch", "The Image API receipt does not match the image request.")

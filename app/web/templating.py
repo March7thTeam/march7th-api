@@ -44,6 +44,12 @@ LABELS = {
     "configured": "已配置", "missing": "未配置", "exists": "存在",
     "operational": "正常", "degraded": "异常",
     "enabled": "已启用", "redeemed": "已兑换",
+    "succeeded": "成功", "completed": "完成", "failed": "失败", "in_flight": "进行中",
+    "settled": "已结算", "released": "已释放", "held": "已冻结", "reserved": "已冻结",
+    "reconciliation_required": "待人工核账", "admin_exempt": "管理员免计费",
+    "legacy_unbilled": "历史未计费", "unbilled": "未计费", "not_billable": "无需计费",
+    "timeout": "超时", "upstream_error": "上游异常", "gateway_error": "网关异常",
+    "streamerror": "流式异常", "stream_incomplete": "流未完整结束", "client_disconnect": "客户端已断开",
 }
 TONES = {
     "active": "ok", "approved": "ok", "configured": "ok", "exists": "ok", "operational": "ok", "enabled": "ok",
@@ -64,8 +70,12 @@ def utc(value) -> str:
     """Compact ISO timestamp for tables: 2026-10-18 07:12."""
     if not value:
         return "—"
-    text = str(value).replace("T", " ")
-    return text[:16] if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text) else text
+    from markupsafe import Markup, escape
+    raw = str(value)
+    text = raw.replace("T", " ")
+    if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text):
+        return Markup('<time datetime="{}" data-local-time title="{} UTC">{}</time>').format(raw, raw, text[:16])
+    return text
 
 
 def credit(value) -> str:
@@ -87,6 +97,11 @@ templates.env.globals.update(
     app_name=settings.app_name,
     app_base_url=settings.app_base_url,
     app_authority=settings.app_authority,
+    operator_name=settings.operator_name,
+    operator_url=settings.operator_url,
+    public_description=settings.public_description,
+    footer_links=settings.footer_links,
+    api_catalog_enabled=settings.api_catalog_enabled,
 )
 def device(user_agent) -> str:
     """Readable "browser · OS" for the account device list; the raw string stays in the title."""

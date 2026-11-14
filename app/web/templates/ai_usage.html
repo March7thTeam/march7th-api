@@ -26,7 +26,7 @@
     {% if t.requests %}<div class="chart">{{ daily_bars(a.daily) }}</div>{% else %}<div class="chart-empty"><p>这段时间还没有调用。</p></div>{% endif %}
   </section>
   <section class="card flush chart-card">
-    <div class="card-head"><div><h2>每日扣费</h2><p>按结算时的官方标准价</p></div><div class="chart-legend"><span><i class="key credit" aria-hidden="true"></i>积分</span></div></div>
+    <div class="card-head"><div><h2>每日扣费</h2><p>按调用时的费率快照</p></div><div class="chart-legend"><span><i class="key credit" aria-hidden="true"></i>积分</span></div></div>
     {% if (t.credits|float) > 0 %}<div class="chart">{{ credit_bars(a.daily) }}</div>{% else %}<div class="chart-empty"><p>这段时间没有已结算的扣费。</p></div>{% endif %}
   </section>
 </div>
@@ -36,14 +36,14 @@
   <section class="card flush"><div class="card-head"><h2>按密钥</h2>{% if not all_users %}<a class="text-link" href="/developer/keys">管理密钥</a>{% else %}<span class="muted small">前 10 · 其余合并</span>{% endif %}</div>{{ breakdown(a.by_key, 'key', t.requests) }}</section>
 </div>
 
-<div class="block-title section-gap"><h2>最近调用</h2><span class="muted small">最多 100 条 · 用请求 ID 对照响应头 X-Request-ID</span></div>
+<div class="block-title section-gap"><h2>最近调用</h2><span class="muted small">最多 100 条 · <a href="/developer/logs">筛选 / CSV</a> · 用请求 ID 对照响应头 X-Request-ID</span></div>
 <div class="card flush"><div class="table-wrap"><table>
   <thead><tr><th>时间 / 请求 ID</th><th>模型 / 协议</th><th>结果</th><th class="right">耗时</th><th class="right">token</th><th class="right">积分</th></tr></thead>
   <tbody>
   {% for row in usage.recent %}
   {% set good = row.outcome in ['succeeded', 'completed'] %}
   <tr>
-    <td><span class="num">{{ row.created_at|utc }}</span><span class="sub mono">{{ row.request_id or '—' }}</span></td>
+    <td><span class="num">{{ row.created_at|utc }}</span><span class="sub mono">{% if row.request_id %}<a href="/developer/usage/requests/{{ row.id }}">{{ row.request_id }}</a>{% else %}—{% endif %}</span></td>
     <td><div class="cell-model">{{ roundel(row.model or '?', 'sm') }}<div><code>{{ row.model or '—' }}</code><span class="sub">{{ row.protocol }}{{ ' · 流式' if row.streamed else '' }}</span></div></div></td>
     <td><span class="badge {{ 'ok' if good else 'warn' if row.outcome == 'in_flight' else 'danger' }}">{{ outcome_labels.get(row.outcome, row.outcome) }}</span><span class="sub mono">HTTP {{ row.status_code or '—' }}</span></td>
     <td class="num right">{{ row.response_time_ms if row.response_time_ms is not none else '—' }} ms</td>
@@ -55,5 +55,5 @@
   {% endfor %}
   </tbody>
 </table></div></div>
-<p class="muted small section-note">token 只累加上游实际回报的值。生成按调用时保存的官方标准价结算；缺少可靠用量的请求转人工核账，历史调用不补扣。</p>
+<p class="muted small section-note">token 只累加上游实际回报的值。生成按调用时保存的费率快照结算；缺少可靠用量的请求转人工核账，历史调用不补扣。</p>
 {% endblock %}

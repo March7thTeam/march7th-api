@@ -10,13 +10,13 @@
         <h1 class="name"><span class="zh">换乘枢纽</span><span class="en">Interchange · {{ app_authority }}</span></h1>
         <div class="status"><strong data-line-status>{{ '全线正常运行' if catalog.status == 'operational' else '部分线路异常' }}</strong><span data-line-billable>{{ catalog.billable_count|default(0) }}</span> 条可调用线路<br><a href="/status">查看状态 →</a></div>
       </div>
-      <div class="bar"><a href="https://luomo.moe"><span aria-hidden="true">←</span> 夜行线 <small>luomo.moe</small></a><span class="here" aria-hidden="true"></span><a href="https://file.luomo.moe">文件星港 <small>file.luomo.moe</small> <span aria-hidden="true">→</span></a></div>
+      <div class="bar"><span>{{ app_name }}</span><span class="here" aria-hidden="true"></span><a href="/docs">自托管 · 换乘指南 →</a></div>
     </div>
 
     <div class="hero-grid">
       <div>
         <h2 class="hero-title">一个地址，<br>换乘<mark>每一条模型线路</mark>。</h2>
-        <p class="lead">OpenAI 兼容接口，把 base_url 换成下面这个就能接入。注册即领密钥，按官方标准价以积分结算，每次调用都有记录可查。</p>
+        <p class="lead">{{ public_description }}</p>
         <div class="url-plate"><span class="tag">BASE URL</span><code id="base-url">{{ app_base_url }}/v1</code><button type="button" data-copy-target="base-url">复制</button></div>
         <div class="actions">
           {% if user %}<a class="btn primary" href="/developer/keys">去领取密钥 <span class="arrow" aria-hidden="true">→</span></a>{% else %}<a class="btn primary" href="/register">注册并领取密钥 <span class="arrow" aria-hidden="true">→</span></a>{% endif %}
@@ -73,10 +73,10 @@
 
 <section class="section">
   <div class="wrap">
-    <div class="section-head"><div><p class="eyebrow">Fare · 票价</p><h2>按官方标准价结算，用多少扣多少。</h2><p>每次生成先冻结预算，再按上游回报的实际 token 结算；缓存命中与长上下文使用对应档位。</p></div><a class="btn" href="/pricing">查看全部价格</a></div>
+    <div class="section-head"><div><p class="eyebrow">Fare · 票价</p><h2>按当前费率结算，用多少扣多少。</h2><p>每次生成先冻结预算，再按上游回报的实际 token 结算；缓存命中与长上下文使用对应档位。</p></div><a class="btn" href="/pricing">查看全部价格</a></div>
     <div class="fare">
       <div><span class="big">¥1<em>=</em>100</span><small>积分 · 人民币兑换比例</small></div>
-      <div><span class="big">$1<em>=</em>720</span><small>积分 · 官方美元价格换算</small></div>
+      <div><span class="big">$1<em>=</em>{{ conversion.credits_per_usd }}</span><small>积分 · 当前费率 · {{ conversion.billing_multiplier }} 倍率</small></div>
       <div><span class="big">0</span><small>积分 · 读取模型目录不收费</small></div>
     </div>
   </div>

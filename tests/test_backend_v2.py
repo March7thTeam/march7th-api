@@ -837,6 +837,10 @@ class MigrationTests(BackendCase):
 class CatalogSeedTests(BackendCase):
     def test_seed_never_undoes_edits_or_restores_deleted_routes_and_endpoints(self):
         from scripts.seed_default_apis import seed
+        from scripts.seed_default_apis import DEFAULT_APIS
+        # Self-hosted defaults leave integrations absent; explicitly configure this fixture.
+        with patch.dict(DEFAULT_APIS[0], {'base_url': 'https://core.example.test'}):
+            seed()
         seed()
         api=self.rows("SELECT * FROM apis WHERE slug='luomocore'")[0]
         self.execute("UPDATE apis SET name='Custom',slug='custom',base_url='https://custom.example.test',enabled=0 WHERE id=?",(api["id"],))

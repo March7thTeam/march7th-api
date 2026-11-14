@@ -3,7 +3,7 @@
 {% block content %}
 {% set code_states = {'active':('ok','可兑换'),'redeemed':('off','已兑换'),'revoked':('off','已作废'),'expired':('off','已过期')} %}
 {% set kinds = {'admin_credit':'管理员加分','code_redemption':'兑换码到账','usage_charge':'模型调用','payment':'支付到账','credit_freeze':'积分冻结','credit_release':'解除冻结'} %}
-<div class="page-head"><div><p class="eyebrow">Fare office · 积分运营</p><h1>积分运营</h1><p class="lead">加分、兑换码与核账。资金变动不可修改，每次操作都记录金额、处理人和理由。1 元 = 100 积分，1 美元 = 720 积分。</p></div><div class="actions"><a class="btn ghost" href="/pricing">价格表</a></div></div>
+<div class="page-head"><div><p class="eyebrow">Fare office · 积分运营</p><h1>积分运营</h1><p class="lead">加分、兑换码与核账。资金变动不可修改，每次操作都记录金额、处理人和理由。1 元 = 100 积分，1 美元 = {{ conversion.base_credits_per_usd }} 积分（基础汇率发放，不含模型收费倍率）。</p></div><div class="actions"><a class="btn ghost" href="/pricing">价格表</a></div></div>
 {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
 {% if message %}<div class="notice success" role="status">{{ message }}</div>{% endif %}
 {% if payment_reviews %}
@@ -87,13 +87,13 @@
 
 <div class="block-title section-gap"><h2>最近资金流水</h2></div>
 <div class="card flush"><div class="table-wrap"><table>
-  <thead><tr><th>时间（UTC）</th><th>用户</th><th>类型 / 编号</th><th class="right">余额变动</th><th class="right">冻结变动</th><th class="right">余额</th><th>理由</th></tr></thead>
+  <thead><tr><th>本地时间</th><th>用户</th><th>类型 / 编号</th><th class="right">余额变动</th><th class="right">冻结变动</th><th class="right">余额</th><th>理由</th></tr></thead>
   <tbody>{% for item in ledger %}<tr><td class="num">{{ item.created_at|utc }}</td><td>{{ item.username }}</td><td>{{ kinds.get(item.kind, item.kind) }}<span class="sub mono">{{ item.reference }}</span></td><td class="num right {{ 'plus' if item.delta_units > 0 else 'minus' if item.delta_units < 0 else '' }}">{{ '+' if item.delta_units > 0 else '' }}{{ item.delta_credits|credit }}</td><td class="num right muted">{{ '+' if item.delta_reserved_units > 0 else '' }}{{ item.delta_reserved_credits|credit }}</td><td class="num right">{{ item.balance_after_credits|credit }}</td><td class="small">{{ item.note }}</td></tr>{% else %}<tr><td colspan="7" class="empty">暂无资金变动。</td></tr>{% endfor %}</tbody>
 </table></div></div>
 
 <div class="block-title section-gap"><h2>最近管理审计</h2></div>
 <div class="card flush"><div class="table-wrap"><table>
-  <thead><tr><th>时间（UTC）</th><th>管理员</th><th>动作</th><th>对象</th><th class="right">金额</th><th>理由</th></tr></thead>
+  <thead><tr><th>本地时间</th><th>管理员</th><th>动作</th><th>对象</th><th class="right">金额</th><th>理由</th></tr></thead>
   <tbody>{% for item in audit %}<tr><td class="num">{{ item.created_at|utc }}</td><td>{{ item.actor_username }}</td><td><code>{{ item.action }}</code></td><td class="small">{% if item.user_id %}用户 #{{ item.user_id }} {% endif %}{% if item.usage_id %}调用 #{{ item.usage_id }} {% endif %}{% if item.code_id %}兑换码 #{{ item.code_id }}{% endif %}</td><td class="num right">{{ item.amount_credits|credit if item.amount_units is not none else '—' }}</td><td class="small">{{ item.reason }}</td></tr>{% else %}<tr><td colspan="6" class="empty">暂无管理操作。</td></tr>{% endfor %}</tbody>
 </table></div></div>
 {% endblock %}

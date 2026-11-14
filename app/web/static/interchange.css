@@ -1051,3 +1051,12 @@ td .cell-actions { flex-wrap: nowrap; }
 .image-preview img { display: block; max-width: 100%; max-height: 42rem; width: auto; height: auto; object-fit: contain; }
 .image-preview img[hidden] { display: none; }
 .image-message { padding: 0 1.25rem 1rem; overflow-wrap: anywhere; }
+
+/* Receipts and draft code stay inside their columns, including narrow screens. */
+.code-block { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; margin: 0; padding: 16px 20px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface-2); color: var(--ink); font: 13px/1.7 var(--font-mono); overflow-x: auto; white-space: pre; tab-size: 2; }
+.request-identity { overflow-wrap: anywhere; }
+.play-transcript, .play-receipt { padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,.08); color: var(--code-dim); font-size: 14px; overflow-wrap: anywhere; }
+.play-transcript { max-height: 320px; overflow-y: auto; }
+.play-turn + .play-turn { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.08); }
+.play-turn p { margin: 0 0 8px; white-space: pre-wrap; }
+.play-transcript a, .play-receipt a { color: var(--signal); }

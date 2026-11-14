@@ -232,6 +232,9 @@ class ExactQuotaRejectionTests(unittest.TestCase):
                     self.assertFalse(_explicit_generation_rejection(candidate, 429, 'responses'))
 
 
+from app.price_store import seed_release
+
+
 class ProbeTests(unittest.TestCase):
     @staticmethod
     def chat_tool_response(model=native.MODEL):
@@ -276,7 +279,7 @@ class ProbeTests(unittest.TestCase):
                 self.assertFalse(row['stream'])
                 self.assertTrue(all(record['tool_protocols'] == ['Responses', 'Responses SSE']
                                     for record in result['verified_tool_records'].values()))
-        with patch.dict(PRICE_DATA, {'version': 'unreviewed-price-version'}):
+        with patch.dict(PRICE_DATA, {'version': 'unreviewed-price-version'}), patch('app.price_store.current_release', side_effect=lambda: {**seed_release(), 'text': PRICE_DATA}):
             result = self.api_only_probe(chat_payload=self.chat_tool_response('gpt-5.5-2026-04-23'),
                                          chat_status=200, chat_model='gpt-5.5')
             self.assertFalse(result['passed'])
@@ -453,10 +456,10 @@ class ProbeTests(unittest.TestCase):
         self.assertFalse(result['ledger_audited'])
         self.assertEqual(result['verified_tool_records']['gpt-5.5']['tool_protocols'], ['Responses', 'Responses SSE'])
         self.assertTrue(_identity_matches('gpt-5.5', 'gpt-5.5-2026-04-23'))
-        with patch.dict(PRICE_DATA, {'version': 'unreviewed-price-version'}):
+        with patch.dict(PRICE_DATA, {'version': 'unreviewed-price-version'}), patch('app.price_store.current_release', side_effect=lambda: {**seed_release(), 'text': PRICE_DATA}):
             self.assertFalse(_identity_matches('gpt-5.5', 'gpt-5.5-2026-04-23'))
             self.assertFalse(self.api_only_probe(lambda data: data.update(model='gpt-5.5-2026-04-23'))['passed'])
-        with patch.dict(PRICE_DATA['models']['gpt-5.5'], {'input': '999'}):
+        with patch.dict(PRICE_DATA['models']['gpt-5.5'], {'input': '999'}), patch('app.price_store.current_release', side_effect=lambda: {**seed_release(), 'text': PRICE_DATA}):
             self.assertFalse(_identity_matches('gpt-5.5', 'gpt-5.5-2026-04-23'))
         self.assertFalse(_identity_matches('gpt-4o', 'gpt-4o-2024-05-13'))
 

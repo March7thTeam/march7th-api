@@ -40,7 +40,7 @@
   {% if sessions|length > 1 %}<form method="post" action="/account/sessions/revoke-others" data-confirm="其他设备上的登录会立即失效，确定继续吗？"><button class="btn sm" type="submit">退出其他全部设备</button></form>{% endif %}
 </div>
 <div class="card flush"><div class="table-wrap"><table>
-  <thead><tr><th>设备</th><th>登录时间（UTC）</th><th>最近活动（UTC）</th><th class="right">操作</th></tr></thead>
+  <thead><tr><th>设备</th><th>登录本地时间</th><th>最近活动（UTC）</th><th class="right">操作</th></tr></thead>
   <tbody>
   {% for session in sessions %}
   <tr>

@@ -25,6 +25,7 @@ from urllib.parse import urlsplit, urlunsplit
 from starlette.concurrency import run_in_threadpool
 
 import httpx
+from app.config import integration_secret
 import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -115,11 +116,8 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 
 def key_expired(key_row: Any, at: datetime | None = None) -> bool:
-    raw_expires_at = _row_value(key_row, "expires_at")
-    expires_at = _parse_datetime(raw_expires_at)
-    if raw_expires_at and expires_at is None:
-        return True
-    return expires_at is not None and expires_at <= (at or datetime.now(timezone.utc))
+    from app.ai_usage import _key_expired
+    return _key_expired(key_row, at or datetime.now(timezone.utc))
 
 
 def request_id_for(request: Request) -> str:
@@ -352,7 +350,7 @@ async def read_bounded_response(upstream: httpx.Response, max_bytes: int = MAX_R
 
 
 def get_upstream_secret(secret_ref: str | None) -> str | None:
-    return os.getenv(secret_ref) if secret_ref else None
+    return integration_secret(secret_ref) if secret_ref else None
 
 
 def make_upstream_headers(route: Any) -> dict[str, str]:

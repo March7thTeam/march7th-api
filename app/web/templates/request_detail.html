@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}请求详情 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Receipt · 本次费用</p><h1>请求详情</h1><p class="lead mono request-identity">{{ receipt.request_id }}</p></div><a class="btn" href="/developer/logs">调用记录</a></div>
+<div class="card stack"><p><code>{{ receipt.model or receipt.protocol }}</code> · {{ receipt.outcome|label if receipt.outcome else '进行中' }} · {{ receipt.billing_status|label if receipt.billing_status else '未计费' }}</p><p>冻结 {{ receipt.reserved_credits }} 积分 · 扣费 {{ receipt.charged_credits }} 积分 · 已解除冻结 {{ receipt.released_credits }} 积分</p><p class="muted">解除冻结不是额外入账。待核请求保留占用，由管理员根据可靠凭据处理；不会按输出长度估算扣费。</p></div>
+<section class="card section-gap"><h2>真实记录时间线</h2><ol>{% for event in receipt.timeline %}<li>{{ event.event }} · {{ event.at|utc }}</li>{% endfor %}</ol><p class="muted">派发时间表示服务端提交发送边界，不代表上游收到请求的精确时刻。历史记录缺少的时间不会补造。</p></section>
+<section class="card section-gap"><h2>用量</h2><p>输入 {{ receipt.input_tokens if receipt.input_tokens is not none else '未回报' }} · 输出 {{ receipt.output_tokens if receipt.output_tokens is not none else '未回报' }} token</p></section>
+<details class="more"><summary>本次不可变价格快照</summary><pre class="code-block">{{ snapshot_json }}</pre></details>
+{% endblock %}
